@@ -1,4 +1,4 @@
-# Sticky GP Addon - Complete Documentation (V2 Multi-Character)
+# Sticky GP Addon - Complete Documentation (V5 Custom UVs & Fallback)
 *A comprehensive guide for users, developers, and AI Agents to understand, maintain, and extend the Sticky GP Addon.*
 
 ---
@@ -18,9 +18,9 @@ Doing everything in **Python** (calculating vertex weights per-frame) is incredi
 
 ---
 
-## 2. Multi-Character Support (V2 Architecture)
+## 2. Multi-Character Support (V5 Architecture)
 
-In Version 2, the architecture was drastically refactored to seamlessly support multiple Grease Pencil objects targeting multiple unique meshes simultaneously (e.g., Character A binds to Mesh A, Character B binds to Mesh B).
+In Version 5, the architecture was drastically refactored to seamlessly support multiple Grease Pencil objects targeting multiple unique meshes simultaneously (e.g., Character A binds to Mesh A, Character B binds to Mesh B).
 
 ### A. Object-Level Properties
 Instead of storing the target mesh on the global `bpy.context.scene` (which limits you to one target file-wide), the addon stores the target directly on the Grease Pencil object itself (`bpy.types.Object.sticky_gp_target`). When you click a character's GP object, the UI reads the property assigned to that specific object.

@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (1, 2),
+    "version": (1, 5),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -24,8 +24,9 @@ def generate_sticky_uvs(obj):
     uv_name = "Sticky_GP_UVMap"
     
     if uv_name in mesh.uv_layers:
-        mesh.uv_layers.remove(mesh.uv_layers[uv_name])
-    uv_layer = mesh.uv_layers.new(name=uv_name)
+        uv_layer = mesh.uv_layers[uv_name]
+    else:
+        uv_layer = mesh.uv_layers.new(name=uv_name)
     
     poly_count = len(mesh.polygons)
     if poly_count == 0:
@@ -71,6 +72,9 @@ def generate_sticky_uvs(obj):
             u = u_base + (step / 2) + coords_2d[i][0] * scale
             v = v_base + (step / 2) + coords_2d[i][1] * scale
             uv_layer.data[loop_idx].uv = (u, v)
+            
+    mesh["sticky_gp_poly_count"] = poly_count
+    mesh["sticky_gp_vert_count"] = len(mesh.vertices)
 
 def create_sticky_gn_modifier(gp_obj, target_obj):
     mod_name = "Sticky_GP"
@@ -338,23 +342,41 @@ class STICKYGP_OT_unbind(bpy.types.Operator):
         self.report({'INFO'}, f"Unbound {count} stroke points on frame {frame_num}")
         return {'FINISHED'}
 
-class STICKYGP_OT_regenerate_uvs(bpy.types.Operator):
-    """Regenerate the custom UV map (WARNING: Breaks existing strokes if topology changed)"""
-    bl_idname = "object.regenerate_sticky_uvs"
-    bl_label = "Regenerate Sticky UVs"
+class STICKYGP_OT_fix_topology(bpy.types.Operator):
+    """Automatically fixes all strokes across all frames after you edit the target mesh geometry"""
+    bl_idname = "object.sticky_gp_fix_topology"
+    bl_label = "Fix Strokes & UVs"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        if not obj or obj.type != 'GREASEPENCIL' or not obj.sticky_gp_target:
-            return False
-        return "Sticky_GP_UVMap" in obj.sticky_gp_target.data.uv_layers
+        return obj is not None and obj.type == 'GREASEPENCIL' and obj.sticky_gp_target is not None
 
     def execute(self, context):
-        target_obj = context.active_object.sticky_gp_target
+        gp_obj = context.active_object
+        target_obj = gp_obj.sticky_gp_target
+        
         generate_sticky_uvs(target_obj)
-        self.report({'INFO'}, f"Regenerated Sticky UVs for {target_obj.name}")
+        create_sticky_gn_modifier(gp_obj, target_obj)
+        
+        frames_with_strokes = set()
+        for layer in gp_obj.data.layers:
+            for f in layer.frames:
+                frames_with_strokes.add(f.frame_number)
+                
+        orig_frame = context.scene.frame_current
+        total_bound = 0
+        
+        for f_num in sorted(frames_with_strokes):
+            context.scene.frame_set(f_num)
+            unbind_strokes_on_frame(gp_obj, f_num)
+            count = bind_unbound_strokes(gp_obj, target_obj)
+            total_bound += count
+            
+        context.scene.frame_set(orig_frame)
+        
+        self.report({'INFO'}, f"Successfully fixed topology and rebound {total_bound} stroke points.")
         return {'FINISHED'}
 
 class STICKYGP_PT_panel(bpy.types.Panel):
@@ -374,21 +396,39 @@ class STICKYGP_PT_panel(bpy.types.Panel):
             layout.label(text="Please select a GPencil object.", icon='ERROR')
             return
         
-        row = layout.row()
-        row.operator("object.bind_sticky_gp")
-        
-        row = layout.row()
-        row.operator("object.unbind_sticky_gp")
-
-        if target_obj and "Sticky_GP_UVMap" in target_obj.data.uv_layers:
-            row = layout.row()
-            row.operator("object.regenerate_sticky_uvs", icon='FILE_REFRESH')
+        if target_obj:
+            mesh = target_obj.data
+            current_poly = len(mesh.polygons)
+            current_vert = len(mesh.vertices)
+            
+            baked_poly = mesh.get("sticky_gp_poly_count", -1)
+            baked_vert = mesh.get("sticky_gp_vert_count", -1)
+            
+            if baked_poly == -1 or (current_poly == baked_poly and current_vert == baked_vert):
+                row = layout.row()
+                row.operator("object.bind_sticky_gp")
+                
+                row = layout.row()
+                row.operator("object.unbind_sticky_gp")
+            else:
+                layout.label(text="WARNING: Mesh Topology Changed!", icon='ERROR')
+                row = layout.row()
+                row.scale_y = 1.5
+                row.operator("object.sticky_gp_fix_topology", icon='FILE_REFRESH')
+                
+            layout.separator()
+            box = layout.box()
+            box.label(text="Workflow Instructions:", icon='INFO')
+            box.label(text="1. Draw strokes normally.")
+            box.label(text="2. Click 'Bind New Strokes'.")
+            box.label(text="3. Only use 'Fix Strokes' if you")
+            box.label(text="   add/delete mesh geometry.")
 
 
 def register():
     bpy.utils.register_class(STICKYGP_OT_bind)
     bpy.utils.register_class(STICKYGP_OT_unbind)
-    bpy.utils.register_class(STICKYGP_OT_regenerate_uvs)
+    bpy.utils.register_class(STICKYGP_OT_fix_topology)
     bpy.utils.register_class(STICKYGP_PT_panel)
     bpy.types.Object.sticky_gp_target = bpy.props.PointerProperty(
         name="Target Mesh",
@@ -399,7 +439,7 @@ def register():
 def unregister():
     bpy.utils.unregister_class(STICKYGP_OT_bind)
     bpy.utils.unregister_class(STICKYGP_OT_unbind)
-    bpy.utils.unregister_class(STICKYGP_OT_regenerate_uvs)
+    bpy.utils.unregister_class(STICKYGP_OT_fix_topology)
     bpy.utils.unregister_class(STICKYGP_PT_panel)
     del bpy.types.Object.sticky_gp_target
 
