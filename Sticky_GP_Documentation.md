@@ -1,4 +1,4 @@
-# Sticky GP Addon - Complete Documentation (V6 Custom UVs & Fallback)
+# Sticky GP Addon - Complete Documentation (V7 Smart Keyframe Logic)
 *A comprehensive guide for users, developers, and AI Agents to understand, maintain, and extend the Sticky GP Addon.*
 
 ---
@@ -109,3 +109,23 @@ If an AI agent or developer wishes to extend this addon, here are highly recomme
 
 - **Auto-Bind Handler:** Hook into `bpy.app.handlers.depsgraph_update_post`. Check if the user is in Draw mode and just finished a stroke. If so, automatically run `bind_unbound_strokes` silently. This would eliminate the need for clicking the sidebar button entirely.
 - **Distance Falloff:** Add a Geometry Nodes parameter to gracefully fade out the binding influence if a stroke is drawn too far away from the mesh.
+
+
+---
+
+## 5. V7 Automation & Smart Keyframe Logic
+
+In Version 7, the addon shifted from a static binding system to a dynamic timeline-aware system.
+
+### A. Smart Visible Keyframe Binding (The Offset Workflow)
+In Blender GPv3, strokes hold their visibility until the next keyframe. Users often draw a stroke on Frame A, move the keyframe to Frame B, but want to bind the stroke against the character's deformation on Frame C.
+If the addon blindly binds all unbound strokes, it scrambles everything. If it strictly requires the keyframe to match the playhead, the workflow is broken.
+**The Solution:** The `Bind Visible Strokes` and `Unbind Visible Strokes` operators now scan backwards from the current playhead (`bpy.context.scene.frame_current`). They mathematically identify the exact `frame_number` that is currently active/visible on the screen for each layer. They then process *only* the strokes belonging to that specific keyframe, binding them relative to the *current* playhead mesh pose.
+
+### B. Dynamic UI & Polycount Tracking
+The dangerous standalone "Regenerate UVs" button was removed. The addon now registers `sticky_gp_polycount` on the target object. When binding strokes, it caches the mesh's exact polygon count. If the user edits the mesh topology (adding/removing faces), the UI dynamically detects the mismatch and spawns a red `Fix Strokes (Mesh Changed)` button.
+
+### C. Multi-Frame Auto-Fix
+When the `Fix Strokes` button is clicked, it cannot simply loop over all keyframes and project them against a single mesh pose, because the character deforms across the timeline.
+**The Solution:** The operator collects all unique Grease Pencil keyframe numbers. It loops through them, physically changing the Blender scene frame (`bpy.context.scene.frame_set(f_num)`) so the depsgraph updates the character's pose. It then perfectly re-projects that specific frame's strokes against the correctly deformed mesh, preserving the animation flawlessly.
+
