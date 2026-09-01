@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (1, 1),
+    "version": (1, 2),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -17,6 +17,60 @@ import mathutils
 def get_evaluated_mesh(obj, depsgraph):
     eval_obj = obj.evaluated_get(depsgraph)
     return eval_obj.to_mesh()
+
+def generate_sticky_uvs(obj):
+    import math
+    mesh = obj.data
+    uv_name = "Sticky_GP_UVMap"
+    
+    if uv_name in mesh.uv_layers:
+        mesh.uv_layers.remove(mesh.uv_layers[uv_name])
+    uv_layer = mesh.uv_layers.new(name=uv_name)
+    
+    poly_count = len(mesh.polygons)
+    if poly_count == 0:
+        return
+        
+    grid_size = math.ceil(math.sqrt(poly_count))
+    
+    for poly in mesh.polygons:
+        idx = poly.index
+        grid_x = idx % grid_size
+        grid_y = idx // grid_size
+        
+        u_base = grid_x / grid_size
+        v_base = grid_y / grid_size
+        step = 1.0 / grid_size
+        
+        verts_3d = [mesh.vertices[v].co for v in poly.vertices]
+        center = poly.center
+        normal = poly.normal
+        
+        if normal.length < 0.0001:
+            tangent = mathutils.Vector((1,0,0))
+            bitangent = mathutils.Vector((0,1,0))
+        else:
+            v_up = mathutils.Vector((0,0,1))
+            if abs(normal.dot(v_up)) > 0.99:
+                v_up = mathutils.Vector((1,0,0))
+            tangent = v_up.cross(normal).normalized()
+            bitangent = normal.cross(tangent).normalized()
+            
+        coords_2d = []
+        max_dist = 0.0001
+        for v3d in verts_3d:
+            rel = v3d - center
+            u_local = rel.dot(tangent)
+            v_local = rel.dot(bitangent)
+            coords_2d.append((u_local, v_local))
+            max_dist = max(max_dist, abs(u_local), abs(v_local))
+            
+        scale = (step / 2) * 0.9 / max_dist
+        
+        for i, loop_idx in enumerate(poly.loop_indices):
+            u = u_base + (step / 2) + coords_2d[i][0] * scale
+            v = v_base + (step / 2) + coords_2d[i][1] * scale
+            uv_layer.data[loop_idx].uv = (u, v)
 
 def create_sticky_gn_modifier(gp_obj, target_obj):
     mod_name = "Sticky_GP"
@@ -53,7 +107,7 @@ def create_sticky_gn_modifier(gp_obj, target_obj):
         
         uv_map_attr = nodes.new('GeometryNodeInputNamedAttribute')
         uv_map_attr.data_type = 'FLOAT_VECTOR'
-        uv_map_attr.inputs['Name'].default_value = 'UVMap'
+        uv_map_attr.inputs['Name'].default_value = 'Sticky_GP_UVMap'
         
         bind_uv = nodes.new('GeometryNodeInputNamedAttribute')
         bind_uv.data_type = 'FLOAT_VECTOR'
@@ -75,8 +129,43 @@ def create_sticky_gn_modifier(gp_obj, target_obj):
         
         set_pos = nodes.new('GeometryNodeSetPosition')
         
+        # FALLBACK LOGIC: If Sample UV Surface fails due to boundary float precision, fallback to Sample Index
+        bind_face_idx = nodes.new('GeometryNodeInputNamedAttribute')
+        bind_face_idx.data_type = 'INT'
+        bind_face_idx.inputs['Name'].default_value = 'bind_face_idx'
+        
+        sample_idx_pos = nodes.new('GeometryNodeSampleIndex')
+        sample_idx_pos.data_type = 'FLOAT_VECTOR'
+        sample_idx_pos.domain = 'FACE'
+        
+        sample_idx_normal = nodes.new('GeometryNodeSampleIndex')
+        sample_idx_normal.data_type = 'FLOAT_VECTOR'
+        sample_idx_normal.domain = 'FACE'
+        
+        len_pos = nodes.new('ShaderNodeVectorMath')
+        len_pos.operation = 'LENGTH'
+        
+        cmp_pos = nodes.new('FunctionNodeCompare')
+        cmp_pos.data_type = 'FLOAT'
+        cmp_pos.operation = 'LESS_THAN'
+        cmp_pos.inputs[1].default_value = 0.001
+        
+        switch_pos = nodes.new('GeometryNodeSwitch')
+        switch_pos.input_type = 'VECTOR'
+        
+        switch_normal = nodes.new('GeometryNodeSwitch')
+        switch_normal.input_type = 'VECTOR'
+        
         links.new(obj_info.outputs['Geometry'], sample_pos.inputs['Mesh'])
         links.new(obj_info.outputs['Geometry'], sample_normal.inputs['Mesh'])
+        
+        links.new(obj_info.outputs['Geometry'], sample_idx_pos.inputs['Geometry'])
+        links.new(input_pos.outputs['Position'], sample_idx_pos.inputs['Value'])
+        links.new(bind_face_idx.outputs['Attribute'], sample_idx_pos.inputs['Index'])
+        
+        links.new(obj_info.outputs['Geometry'], sample_idx_normal.inputs['Geometry'])
+        links.new(input_normal.outputs['Normal'], sample_idx_normal.inputs['Value'])
+        links.new(bind_face_idx.outputs['Attribute'], sample_idx_normal.inputs['Index'])
         
         links.new(input_pos.outputs['Position'], sample_pos.inputs['Value'])
         links.new(input_normal.outputs['Normal'], sample_normal.inputs['Value'])
@@ -87,10 +176,21 @@ def create_sticky_gn_modifier(gp_obj, target_obj):
         links.new(bind_uv.outputs['Attribute'], sample_pos.inputs['Sample UV'])
         links.new(bind_uv.outputs['Attribute'], sample_normal.inputs['Sample UV'])
         
-        links.new(sample_normal.outputs['Value'], math_scale.inputs[0])
+        links.new(sample_pos.outputs['Value'], len_pos.inputs[0])
+        links.new(len_pos.outputs['Value'], cmp_pos.inputs[0])
+        
+        links.new(cmp_pos.outputs['Result'], switch_pos.inputs['Switch'])
+        links.new(sample_pos.outputs['Value'], switch_pos.inputs['False'])
+        links.new(sample_idx_pos.outputs['Value'], switch_pos.inputs['True'])
+        
+        links.new(cmp_pos.outputs['Result'], switch_normal.inputs['Switch'])
+        links.new(sample_normal.outputs['Value'], switch_normal.inputs['False'])
+        links.new(sample_idx_normal.outputs['Value'], switch_normal.inputs['True'])
+        
+        links.new(switch_normal.outputs['Output'], math_scale.inputs[0])
         links.new(bind_dist.outputs['Attribute'], math_scale.inputs['Scale'])
         
-        links.new(sample_pos.outputs['Value'], math_add.inputs[0])
+        links.new(switch_pos.outputs['Output'], math_add.inputs[0])
         links.new(math_scale.outputs['Vector'], math_add.inputs[1])
         
         links.new(group_in.outputs['Geometry'], set_pos.inputs['Geometry'])
@@ -106,16 +206,23 @@ def create_sticky_gn_modifier(gp_obj, target_obj):
             node.inputs['Object'].default_value = target_obj
 
 def bind_unbound_strokes(gp_obj, target_obj):
+    if "Sticky_GP_UVMap" not in target_obj.data.uv_layers:
+        generate_sticky_uvs(target_obj)
+
     depsgraph = bpy.context.evaluated_depsgraph_get()
     
     mesh = get_evaluated_mesh(target_obj, depsgraph)
     
-    if not mesh.uv_layers:
-        mesh.uv_layers.new(name="UVMap")
-        
     bm = bmesh.new()
     bm.from_mesh(mesh)
-    uv_layer = bm.loops.layers.uv.verify()
+    uv_layer = bm.loops.layers.uv.get("Sticky_GP_UVMap")
+    if not uv_layer:
+        uv_layer = bm.loops.layers.uv.verify()
+        
+    idx_layer = bm.faces.layers.int.new("orig_idx")
+    for f in bm.faces:
+        f[idx_layer] = f.index
+        
     bmesh.ops.triangulate(bm, faces=bm.faces)
     bm.faces.ensure_lookup_table()
     bvh = mathutils.bvhtree.BVHTree.FromBMesh(bm)
@@ -137,10 +244,13 @@ def bind_unbound_strokes(gp_obj, target_obj):
                 drawing.attributes.new(name='bind_dist', type='FLOAT', domain='POINT')
             if 'is_bound' not in drawing.attributes:
                 drawing.attributes.new(name='is_bound', type='BOOLEAN', domain='POINT')
+            if 'bind_face_idx' not in drawing.attributes:
+                drawing.attributes.new(name='bind_face_idx', type='INT', domain='POINT')
                 
             attr_uv = drawing.attributes['bind_uv'].data
             attr_dist = drawing.attributes['bind_dist'].data
             attr_bound = drawing.attributes['is_bound'].data
+            attr_idx = drawing.attributes['bind_face_idx'].data
             
             if 'position' in drawing.attributes:
                 points = drawing.attributes['position'].data
@@ -164,12 +274,30 @@ def bind_unbound_strokes(gp_obj, target_obj):
                                 attr_uv[i].vector = final_uv
                                 attr_dist[i].value = distance
                                 attr_bound[i].value = True
+                                attr_idx[i].value = face[idx_layer]
                                 bound_count += 1
                                 
     bm.free()
     target_obj.evaluated_get(depsgraph).to_mesh_clear()
     
     return bound_count
+
+def unbind_strokes_on_frame(gp_obj, frame_num):
+    gp_data = gp_obj.data
+    unbound_count = 0
+    
+    for layer in gp_data.layers:
+        for frame in layer.frames:
+            if frame.frame_number == frame_num:
+                drawing = frame.drawing
+                if 'is_bound' in drawing.attributes:
+                    attr_bound = drawing.attributes['is_bound'].data
+                    for i in range(len(attr_bound)):
+                        if attr_bound[i].value:
+                            attr_bound[i].value = False
+                            unbound_count += 1
+                            
+    return unbound_count
 
 class STICKYGP_OT_bind(bpy.types.Operator):
     """Bind newly drawn GP strokes to the target mesh"""
@@ -191,6 +319,44 @@ class STICKYGP_OT_bind(bpy.types.Operator):
         self.report({'INFO'}, f"Bound {count} new stroke points to {target_obj.name}")
         return {'FINISHED'}
 
+class STICKYGP_OT_unbind(bpy.types.Operator):
+    """Unbind all GP strokes on the current frame"""
+    bl_idname = "object.unbind_sticky_gp"
+    bl_label = "Unbind Current Frame"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object is not None and context.active_object.type == 'GREASEPENCIL'
+
+    def execute(self, context):
+        gp_obj = context.active_object
+        frame_num = context.scene.frame_current
+        
+        count = unbind_strokes_on_frame(gp_obj, frame_num)
+        
+        self.report({'INFO'}, f"Unbound {count} stroke points on frame {frame_num}")
+        return {'FINISHED'}
+
+class STICKYGP_OT_regenerate_uvs(bpy.types.Operator):
+    """Regenerate the custom UV map (WARNING: Breaks existing strokes if topology changed)"""
+    bl_idname = "object.regenerate_sticky_uvs"
+    bl_label = "Regenerate Sticky UVs"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        if not obj or obj.type != 'GREASEPENCIL' or not obj.sticky_gp_target:
+            return False
+        return "Sticky_GP_UVMap" in obj.sticky_gp_target.data.uv_layers
+
+    def execute(self, context):
+        target_obj = context.active_object.sticky_gp_target
+        generate_sticky_uvs(target_obj)
+        self.report({'INFO'}, f"Regenerated Sticky UVs for {target_obj.name}")
+        return {'FINISHED'}
+
 class STICKYGP_PT_panel(bpy.types.Panel):
     """Creates a Panel in the scene context of the properties editor"""
     bl_label = "Sticky GP"
@@ -203,6 +369,7 @@ class STICKYGP_PT_panel(bpy.types.Panel):
         layout = self.layout
         if context.active_object and context.active_object.type == 'GREASEPENCIL':
             layout.prop(context.active_object, "sticky_gp_target")
+            target_obj = context.active_object.sticky_gp_target
         else:
             layout.label(text="Please select a GPencil object.", icon='ERROR')
             return
@@ -210,10 +377,18 @@ class STICKYGP_PT_panel(bpy.types.Panel):
         row = layout.row()
         row.operator("object.bind_sticky_gp")
         
+        row = layout.row()
+        row.operator("object.unbind_sticky_gp")
+
+        if target_obj and "Sticky_GP_UVMap" in target_obj.data.uv_layers:
+            row = layout.row()
+            row.operator("object.regenerate_sticky_uvs", icon='FILE_REFRESH')
 
 
 def register():
     bpy.utils.register_class(STICKYGP_OT_bind)
+    bpy.utils.register_class(STICKYGP_OT_unbind)
+    bpy.utils.register_class(STICKYGP_OT_regenerate_uvs)
     bpy.utils.register_class(STICKYGP_PT_panel)
     bpy.types.Object.sticky_gp_target = bpy.props.PointerProperty(
         name="Target Mesh",
@@ -223,6 +398,8 @@ def register():
 
 def unregister():
     bpy.utils.unregister_class(STICKYGP_OT_bind)
+    bpy.utils.unregister_class(STICKYGP_OT_unbind)
+    bpy.utils.unregister_class(STICKYGP_OT_regenerate_uvs)
     bpy.utils.unregister_class(STICKYGP_PT_panel)
     del bpy.types.Object.sticky_gp_target
 
