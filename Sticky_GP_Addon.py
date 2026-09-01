@@ -97,6 +97,10 @@ def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
     input_pos = nodes.new('GeometryNodeInputPosition')
     input_normal = nodes.new('GeometryNodeInputNormal')
     
+    global_offset_node = nodes.new('ShaderNodeValue')
+    global_offset_node.name = "GlobalOffsetValue"
+    global_offset_node.outputs[0].default_value = gp_obj.sticky_gp_global_offset
+    
     sep_bary = nodes.new('ShaderNodeSeparateXYZ')
     links.new(bind_bary.outputs['Attribute'], sep_bary.inputs['Vector'])
     
@@ -211,7 +215,12 @@ def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
         scale_dist = nodes.new('ShaderNodeVectorMath')
         scale_dist.operation = 'SCALE'
         links.new(norm_n.outputs['Vector'], scale_dist.inputs[0])
-        links.new(bind_dist.outputs['Attribute'], scale_dist.inputs['Scale'])
+        
+        add_dist = nodes.new('ShaderNodeMath')
+        add_dist.operation = 'ADD'
+        links.new(bind_dist.outputs['Attribute'], add_dist.inputs[0])
+        links.new(global_offset_node.outputs[0], add_dist.inputs[1])
+        links.new(add_dist.outputs[0], scale_dist.inputs['Scale'])
         
         final_pos = nodes.new('ShaderNodeVectorMath')
         final_pos.operation = 'ADD'
@@ -540,6 +549,11 @@ class STICKYGP_PT_panel(bpy.types.Panel):
         layout.separator()
         
         row = layout.row()
+        row.prop(obj, "sticky_gp_global_offset")
+        
+        layout.separator()
+        
+        row = layout.row()
         row.operator("object.bind_sticky_gp")
         
         row = layout.row()
@@ -610,6 +624,15 @@ def auto_rebuild_gn_on_reload():
                     create_sticky_gn_modifier(obj, target_dict, force_rebuild=True)
     return None
 
+def update_offset(self, context):
+    mod_name = "Sticky_GP"
+    if mod_name in self.modifiers:
+        group_name = f"Sticky_GP_Nodes_{self.name}"
+        if group_name in bpy.data.node_groups:
+            node_group = bpy.data.node_groups[group_name]
+            if "GlobalOffsetValue" in node_group.nodes:
+                node_group.nodes["GlobalOffsetValue"].outputs[0].default_value = self.sticky_gp_global_offset
+
 def register():
     bpy.utils.register_class(STICKYGP_LayerTarget)
     if bpy.app.background is False:
@@ -627,6 +650,14 @@ def register():
         name="Polycount Cache",
         default=0,
         description="Tracks the last known polycount of the mesh to detect topological changes"
+    )
+    bpy.types.Object.sticky_gp_global_offset = bpy.props.FloatProperty(
+        name="Global Offset",
+        default=0.0,
+        min=-1.0,
+        max=1.0,
+        description="Offsets all bound strokes outwards or inwards from the mesh surface",
+        update=update_offset
     )
 
 def unregister():
