@@ -1,5 +1,12 @@
 # Sticky GP - Complete Changelog
 
+## V2.2 (Workflow & UX Update)
+- **[NEW]** Global Offset Slider: Added a slider to the N-Panel (ranging from -1 to 1) that pushes all bound strokes outwards or inwards globally to prevent clipping with the target mesh. The Geometry Nodes math was dynamically updated to support this.
+- **[NEW]** Real-Time Viewport Feedback: Connected a python `update_offset` callback hook that instantly passes the N-Panel UI slider values into the Geometry Nodes modifier for real-time visual tweaking.
+- **[NEW]** Developer Auto-Reload Hook: Added a timed background hook (`auto_rebuild_gn_on_reload`) that executes 0.1 seconds after the addon registers (F8 reload). It safely nukes and completely rebuilds existing GN modifiers in your open scene so python edits are visible instantly.
+- **[OPT]** Smart Node Optimization: The addon now generates a string hash of the targeted meshes required by the strokes. When binding or unbinding strokes, if the required meshes match the existing modifier's hash, it safely skips recompilation to save performance.
+- **[FIX]** Polycount Tracker Crash: Fixed a `NameError` crash when clicking "Fix Strokes" on modified meshes. Updated the legacy function call to correctly handle multi-object collection lists instead of singular objects.
+
 ## V2.1
 - **[NEW]** Multi-Object Collection Binding: Assign entire Collections to a layer. The addon automatically evaluates every mesh and binds strokes across overlapping geometry seamlessly.
 - **[NEW]** N-Panel UI Mode Toggle: Layers feature a dropdown to switch between 'Object' mode and 'Collection' mode, dynamically changing the picker slot.

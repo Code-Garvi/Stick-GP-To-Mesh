@@ -19,6 +19,9 @@ Each item maps a layer to a target using:
 - `target_mesh` (Pointer): The mesh object if 'OBJECT' mode.
 - `target_collection` (Pointer): The collection if 'COLLECTION' mode.
 
+**Global Offset Property:**
+The GP Object also holds a float property `sticky_gp_global_offset`. A Python `update` callback instantly pushes changes from this slider directly into the Geometry Nodes setup, providing real-time visual feedback in the viewport.
+
 ### 2.2 Python Raycasting Engine (The Bake)
 When `bind_unbound_strokes` is executed, Python bakes mathematically precise targeting data into the GP stroke points.
 1. **Mesh Evaluation & BVH:** Generates a triangulated BMesh and `mathutils.bvhtree.BVHTree` for every target. Evaluates modifiers (e.g., Armatures) using `obj.evaluated_get(depsgraph)`.
@@ -31,23 +34,30 @@ When `bind_unbound_strokes` is executed, Python bakes mathematically precise tar
     - `bind_target_idx` (INT): ID of the target mesh.
     - `is_bound` (BOOL): Flag to prevent double-binding.
 
-### 2.3 Geometry Nodes Compiler
+### 2.3 Geometry Nodes Compiler & Optimizations
 A Python script dynamically generates the `Sticky_GP` modifier node tree. For every assigned mesh, it writes a node block that:
 1. **Sample Index (Position):** Extracts 3D coordinates for `bind_v1`, `bind_v2`, `bind_v3`.
 2. **Barycentric Interpolation:** Calculates `(Pos1 * U) + (Pos2 * V) + (Pos3 * W)` to locate the deformed surface point.
 3. **Smooth Normal Interpolation:** Does the same for `GeometryNodeInputNormal` from the POINT domain, inheriting smooth shading to prevent kinks at polygon edges.
-4. **Offset:** Moves the point away by `bind_dist` along the calculated normal.
+4. **Offset & Global Push:** Adds the baked `bind_dist` and the user-adjustable `GlobalOffsetValue` (Math ADD node), then pushes the point away along the calculated normal.
 5. **Target Switch:** Applies a Set Position node filtering by `bind_target_idx`.
 
-### 2.4 Polycount Maintenance Tracker
+**Smart GN Optimization (Target Hashing):**
+Re-compiling the GN modifier can be slow. When the script builds the modifier, it joins all required mesh names into a string hash and saves it (e.g., `node_group["sticky_gp_targets"] = "MeshA,MeshB"`). On future stroke binds, the addon checks if the new stroke's required targets match the existing hash. If they do, it securely aborts the rebuild process and perfectly re-uses the existing node group.
+
+### 2.4 Polycount Maintenance Tracker & Dev Reloads
 Barycentric logic relies on constant vertex indices. If the user edits the mesh topology (e.g., extruding, subdividing), the indices shift, destroying the bind data.
 - The addon caches the `sticky_gp_polycount` for every target mesh.
 - The N-Panel continuously compares live polycounts to the cache.
 - If a mismatch occurs, it surfaces a **"Fix Strokes (Mesh Changed)"** button.
 - Clicking the fix button iterates through the timeline, unbinds the broken strokes, rebuilds the BVH trees over the new topology, and perfectly re-bakes the barycentric coordinates.
 
+**Developer Hot-Reload Hook:**
+To solve testing workflow issues, a background timer hook (`auto_rebuild_gn_on_reload`) automatically triggers 0.1 seconds after the addon's `register()` function is called (e.g., hitting F8). It bypasses all GN hashing optimizations, scans the active scene for bound GP objects, and rigorously nukes and rebuilds their GN modifiers so that Python code edits visually update in the viewport instantly.
+
 ## 3. Major Iterations & Paradigm Shifts
 
 - **V1.0 - V1.8 (UV Map Paradigm):** Relied on generating a per-face UV map (`Sticky_GP_UVMap`). Caused floating point errors and prevented smooth normal interpolation.
 - **V2.0 (Pure Barycentric Paradigm):** Deleted the UV dependency. Moved entirely to vertex indices (`bind_v1`, `v2`, `v3`) and barycentric weights, solving shading and precision issues.
 - **V2.1 (Collection Binding):** Introduced the ability to assign an entire collection to a layer, enabling strokes to automatically bind across multiple overlapping meshes seamlessly.
+- **V2.2 (Workflow & Offset Update):** Introduced the Global Offset slider driven via python updates, automated target hashing to skip redundant modifier recompilation, and an automated background hook for instant developer hot-reloading.
