@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (2, 1),
+    "version": (2, 2),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
