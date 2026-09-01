@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (2, 0),
+    "version": (2, 1),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -18,12 +18,18 @@ def get_evaluated_mesh(obj, depsgraph):
     eval_obj = obj.evaluated_get(depsgraph)
     return eval_obj.to_mesh()
 
-def get_layer_target(gp_obj, layer_name):
+def get_layer_targets(gp_obj, layer_name):
+    targets = []
     for item in gp_obj.sticky_gp_layer_targets:
         if item.layer_name == layer_name:
-            if item.target_mesh and item.target_mesh.type == 'MESH':
-                return item.target_mesh
-    return None
+            if item.target_mode == 'OBJECT' and item.target_mesh and item.target_mesh.type == 'MESH':
+                targets.append(item.target_mesh)
+            elif item.target_mode == 'COLLECTION' and item.target_collection:
+                for obj in item.target_collection.objects:
+                    if obj.type == 'MESH':
+                        targets.append(obj)
+            break
+    return targets
 
 def create_sticky_gn_modifier(gp_obj, target_dict):
     mod_name = "Sticky_GP"
@@ -226,8 +232,8 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
     target_dict = {}
     idx = 1
     for layer in gp_data.layers:
-        target = get_layer_target(gp_obj, layer.name)
-        if target:
+        targets = get_layer_targets(gp_obj, layer.name)
+        for target in targets:
             if target not in target_dict:
                 target_dict[target] = idx
                 idx += 1
@@ -257,12 +263,9 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
     bound_count = 0
     current_scene_frame = bpy.context.scene.frame_current
     for layer in gp_data.layers:
-        target_obj = get_layer_target(gp_obj, layer.name)
-        if not target_obj:
+        target_objs = get_layer_targets(gp_obj, layer.name)
+        if not target_objs:
             continue
-            
-        target_idx = target_dict[target_obj]
-        bvh, bm, gp_to_target = bvh_cache[target_obj]
         
         target_frames = set()
         if frame_num is not None:
@@ -308,10 +311,23 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
                 for i in range(len(points)):
                     if not attr_bound[i].value:
                         pos_gp = points[i].vector
-                        pos_target = gp_to_target @ pos_gp
                         
-                        location, normal, index, distance = bvh.find_nearest(pos_target)
-                        if location is not None:
+                        best_dist = float('inf')
+                        best_match = None
+                        
+                        for target_obj in target_objs:
+                            bvh, bm, gp_to_target = bvh_cache[target_obj]
+                            pos_target = gp_to_target @ pos_gp
+                            location, normal, index, distance = bvh.find_nearest(pos_target)
+                            
+                            if location is not None and distance < best_dist:
+                                best_dist = distance
+                                best_match = (target_obj, location, index, distance, bm)
+                                
+                        if best_match is not None:
+                            target_obj, location, index, distance, bm = best_match
+                            target_idx = target_dict[target_obj]
+                            
                             face = bm.faces[index]
                             v1, v2, v3 = (v.co for v in face.verts[:3])
                             bary = mathutils.geometry.barycentric_transform(location, v1, v2, v3, mathutils.Vector((1,0,0)), mathutils.Vector((0,1,0)), mathutils.Vector((0,0,1)))
@@ -372,7 +388,7 @@ class STICKYGP_OT_bind(bpy.types.Operator):
         obj = context.active_object
         if obj is None or obj.type != 'GREASEPENCIL':
             return False
-        return any(get_layer_target(obj, layer.name) for layer in obj.data.layers)
+        return any(get_layer_targets(obj, layer.name) for layer in obj.data.layers)
 
     def execute(self, context):
         gp_obj = context.active_object
@@ -411,7 +427,7 @@ class STICKYGP_OT_fix_strokes(bpy.types.Operator):
         obj = context.active_object
         if obj is None or obj.type != 'GREASEPENCIL':
             return False
-        return any(get_layer_target(obj, layer.name) for layer in obj.data.layers)
+        return any(get_layer_targets(obj, layer.name) for layer in obj.data.layers)
 
     def execute(self, context):
         gp_obj = context.active_object
@@ -496,7 +512,12 @@ class STICKYGP_PT_panel(bpy.types.Panel):
                     break
             
             if item:
-                row.prop(item, "target_mesh", text=layer.name)
+                row.label(text=layer.name)
+                row.prop(item, "target_mode", text="")
+                if item.target_mode == 'OBJECT':
+                    row.prop(item, "target_mesh", text="")
+                else:
+                    row.prop(item, "target_collection", text="")
             else:
                 row.label(text=layer.name)
                 op = row.operator("object.add_sticky_gp_layer_target", text="Assign Mesh")
@@ -513,11 +534,13 @@ class STICKYGP_PT_panel(bpy.types.Panel):
         # Global polycount check
         needs_fix = False
         for layer in obj.data.layers:
-            target = get_layer_target(obj, layer.name)
-            if target:
+            targets = get_layer_targets(obj, layer.name)
+            for target in targets:
                 if len(target.data.polygons) != target.sticky_gp_polycount:
                     needs_fix = True
                     break
+            if needs_fix:
+                break
                     
         if needs_fix:
             row = layout.row()
@@ -539,10 +562,19 @@ class STICKYGP_PT_panel(bpy.types.Panel):
 
 class STICKYGP_LayerTarget(bpy.types.PropertyGroup):
     layer_name: bpy.props.StringProperty()
+    target_mode: bpy.props.EnumProperty(
+        items=[('OBJECT', "Object", ""), ('COLLECTION', "Collection", "")],
+        name="Target Mode",
+        default='OBJECT'
+    )
     target_mesh: bpy.props.PointerProperty(
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'MESH',
         description="Select the mesh to stick this layer's strokes to"
+    )
+    target_collection: bpy.props.PointerProperty(
+        type=bpy.types.Collection,
+        description="Select the collection of meshes to stick this layer's strokes to"
     )
 
 def register():
@@ -574,3 +606,4 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+

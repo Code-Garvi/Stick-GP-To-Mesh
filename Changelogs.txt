@@ -1,7 +1,6 @@
-# Sticky GP V2.0 (nouv) Changelog
+# Sticky GP V2.1 Changelog
 
-[MAJOR ARCHITECTURE CHANGE] Completely removed the UV-mapping dependency! The addon now uses pure Barycentric Interpolation via Geometry Nodes.
-[NEW] Flawless smooth stroke offsets: By directly averaging the target mesh's smooth vertex normals, strokes no longer kink or jaggedly cross polygon boundaries.
-[REMOVED] 'generate_sticky_uvs' function and the hidden 'Sticky_GP_UVMap'. The addon no longer clutters your mesh with custom UV maps.
-[MODIFIED] 'bind_unbound_strokes' logic: Instead of baking 2D UV coordinates into points, Python now bakes the 3 physical vertex indices of the target triangle ('bind_v1', 'bind_v2', 'bind_v3') and their mathematical weights ('bind_bary').
-[MODIFIED] GN Node Compiler: Re-written from the ground up to utilize 'Sample Index' (Point Domain) for position and normal interpolation, calculating exact surface coordinates entirely mathematically.
+[NEW] Multi-Object Collection Binding! You can now assign an entire Collection to a layer. The addon will automatically evaluate every mesh in the collection and bind your strokes across overlapping geometry seamlessly.
+[NEW] N-Panel UI Mode Toggle: Layers now have a dropdown to switch between 'Object' mode and 'Collection' mode, dynamically changing the picker slot.
+[MODIFIED] Raycast Binding Engine: The core python loop now supports multi-target evaluation per point. It compares distances against all meshes in the target list and assigns the point to the absolute closest surface.
+[MODIFIED] Polycount Tracker: Fix Strokes now iterates over all meshes inside targeted collections, triggering auto-fix prompts if *any* mesh in the collection has its topology edited.
