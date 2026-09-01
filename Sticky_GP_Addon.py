@@ -458,8 +458,8 @@ class STICKYGP_OT_fix_strokes(bpy.types.Operator):
         # Collect all targeted meshes
         target_meshes = set()
         for layer in gp_obj.data.layers:
-            target = get_layer_target(gp_obj, layer.name)
-            if target:
+            targets = get_layer_targets(gp_obj, layer.name)
+            for target in targets:
                 target_meshes.add(target)
                 
         
