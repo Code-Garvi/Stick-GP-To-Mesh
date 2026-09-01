@@ -576,16 +576,17 @@ class STICKYGP_PT_panel(bpy.types.Panel):
             row.operator("object.fix_sticky_gp_strokes", icon='ERROR')
             
         layout.separator()
-        help_box = layout.box()
-        help_box.label(text="How to Use:", icon='INFO')
-        col = help_box.column(align=True)
-        col.label(text="1. Assign target meshes to your layers.")
-        col.label(text="2. Draw on your character.")
-        col.label(text="3. Click 'Bind Visible Strokes'.")
-        col.label(text="4. Sculpt and animate freely!")
-        col.label(text="Note: If you add/delete polygons,")
-        col.label(text="the red Fix Strokes button will")
-        col.label(text="appear. Click it to auto-fix!")
+        row = layout.row()
+        icon = 'TRIA_DOWN' if context.scene.stickygp_show_guide else 'TRIA_RIGHT'
+        row.prop(context.scene, "stickygp_show_guide", icon=icon, emboss=False)
+        if context.scene.stickygp_show_guide:
+            help_box = layout.box()
+            col = help_box.column(align=True)
+            col.label(text="• Setup: Assign a Target Mesh or Collection.")
+            col.label(text="• Draw: Draw strokes anywhere near the target.")
+            col.label(text="• Bind / Unbind: Attach strokes, or detach them.")
+            col.label(text="• Tweak: Use 'Global Offset' to fix clipping.")
+            col.label(text="• Fix: Click red warning to re-bake if mesh changes.")
 
 
 class STICKYGP_LayerTarget(bpy.types.PropertyGroup):
@@ -659,6 +660,10 @@ def register():
         description="Offsets all bound strokes outwards or inwards from the mesh surface",
         update=update_offset
     )
+    bpy.types.Scene.stickygp_show_guide = bpy.props.BoolProperty(
+        name="Quick Guide",
+        default=False
+    )
 
 def unregister():
     bpy.utils.unregister_class(STICKYGP_OT_bind)
@@ -669,6 +674,9 @@ def unregister():
     bpy.utils.unregister_class(STICKYGP_LayerTarget)
     del bpy.types.Object.sticky_gp_layer_targets
     del bpy.types.Object.sticky_gp_polycount
+    
+    if hasattr(bpy.types.Scene, "stickygp_show_guide"):
+        del bpy.types.Scene.stickygp_show_guide
 
 if __name__ == "__main__":
     register()
