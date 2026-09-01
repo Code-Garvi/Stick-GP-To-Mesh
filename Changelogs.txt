@@ -1,9 +1,7 @@
-# Sticky GP V8 Changelog
+# Sticky GP V2.0 (nouv) Changelog
 
-[NEW] Per-Layer Multi-Mesh Support! You can now stick 'Layer 1' to 'Mesh A', and 'Layer 2' to 'Mesh B'.
-[NEW] N-Panel UI redesign: Shows a list of all your GP Layers with individual 'Assign Mesh' target slots.
-[NEW] Dynamic Geometry Nodes compiler: Re-written GN modifier generation from scratch. It now acts as a multi-mesh router, seamlessly piping deformations from multiple meshes simultaneously based on a baked 'secret id' index per layer.
-[MODIFIED] UI Panel drawing loop: Fixed Blender exception "Writing to ID classes in this context is not allowed" by introducing an explicit 'Assign Mesh' button for new layers, preventing data mutation during UI draws.
-[MODIFIED] Property Registration: Removed 'bpy.types.Object.sticky_gp_target'. Replaced with a scalable 'CollectionProperty' mapping layer names to target meshes.
-[MODIFIED] Smart Polycount Tracker: Now loops over all assigned layer meshes simultaneously. If ANY target mesh is edited, the Fix Strokes button appears globally.
-[MODIFIED] Fix Strokes operator: Automatically iterates through all unique target meshes to regenerate their UVs before looping over the timeline to rebind.
+[MAJOR ARCHITECTURE CHANGE] Completely removed the UV-mapping dependency! The addon now uses pure Barycentric Interpolation via Geometry Nodes.
+[NEW] Flawless smooth stroke offsets: By directly averaging the target mesh's smooth vertex normals, strokes no longer kink or jaggedly cross polygon boundaries.
+[REMOVED] 'generate_sticky_uvs' function and the hidden 'Sticky_GP_UVMap'. The addon no longer clutters your mesh with custom UV maps.
+[MODIFIED] 'bind_unbound_strokes' logic: Instead of baking 2D UV coordinates into points, Python now bakes the 3 physical vertex indices of the target triangle ('bind_v1', 'bind_v2', 'bind_v3') and their mathematical weights ('bind_bary').
+[MODIFIED] GN Node Compiler: Re-written from the ground up to utilize 'Sample Index' (Point Domain) for position and normal interpolation, calculating exact surface coordinates entirely mathematically.

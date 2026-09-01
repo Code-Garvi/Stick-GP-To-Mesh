@@ -1,30 +1,28 @@
-# Sticky GP V8 - Technical Documentation
+# Sticky GP V2.0 - Technical Documentation
 
-## Core Architecture
-Sticky GP V8 introduces **Per-Layer Multi-Mesh Targeting**. Previously, the entire Grease Pencil object was stuck to a single mesh. In V8, each individual Grease Pencil Layer can be assigned to completely different mesh objects in the scene.
+## The Pure Barycentric Paradigm
 
-### 1. Data Storage (The Property Issue)
-In Blender 4.3+ (GPv3 architecture), GreasePencilLayer objects do not natively support arbitrary custom ID properties like PointerProperty. 
-To solve this, the target meshes are stored on the Grease Pencil Object itself using a CollectionProperty of type STICKYGP_LayerTarget. 
-This collection acts as a dictionary mapping layer_name -> 	arget_mesh.
+In versions 1.0 -> 1.8, Sticky GP relied on generating a shattered, per-face UV map (Sticky_GP_UVMap) on the target meshes. While this worked, it caused floating point precision errors at polygon boundaries and prevented smooth normal interpolation, leading to "jagged" strokes when the GP line had a distance offset from the mesh.
 
-### 2. The Geometry Nodes Router (GN Compilation)
-Geometry Nodes for GPv3 merges all layers into a single Point Cloud and currently lacks a native 'layer name' attribute.
-Because strokes from different layers need to snap to different meshes, the Python script acts as a compiler:
-1. Python scans all layers and gathers all unique target meshes.
-2. It assigns an integer index (1, 2, 3...) to each unique mesh.
-3. It dynamically generates a complex Geometry Nodes modifier (create_sticky_gn_modifier).
-4. This node tree contains an Object Info node and Raycast/Sample logic for **every single target mesh**.
-5. The nodes use a custom point attribute ind_target_idx to switch which mesh the point should snap to using consecutive Set Position nodes gated by a Selection boolean (ind_target_idx == assigned_idx).
+### Version 2.0 deletes the UV dependency entirely.
 
-### 3. Raycast Binding
-When the user clicks "Bind Visible Strokes":
-- The script checks the scene's current frame and limits the bind logic to only the drawings that are currently visible at the playhead.
-- It iterates through each layer, grabbing its specific target mesh.
-- It calculates the barycentric coordinates (UV + Distance) against that specific mesh using a BVHTree.
-- Crucially, it bakes the layer's assigned ind_target_idx integer into the GP points so Geometry Nodes knows where to route them.
+Instead of translating 3D space into 2D UV space and back, the addon now operates strictly using **Vertex Indices** and **Barycentric Weights**.
 
-### 4. Smart Polycount Tracking & Global Fixing
-The addon stores sticky_gp_polycount on every assigned target mesh.
-The N-Panel actively monitors all assigned meshes. If *any* mesh's polygon count changes (e.g. topology edits, subdivisions), a global Fix Strokes (Mesh Changed) button appears.
-Clicking this alters the scene frame iteratively to visit every single keyframe across the timeline, unbinds the points, recalculates the barycentric coordinates against the new topology, and rebinds them perfectly in place.
+### 1. Python Binding Data (The "Bake")
+When the user clicks 'Bind Visible Strokes', the Python script raycasts against the target mesh to find the exact triangle the stroke point is hovering over. 
+Instead of a UV coordinate, Python saves 4 attributes into the GP Point Cloud:
+- ind_v1 (INT): The index of the triangle's 1st vertex.
+- ind_v2 (INT): The index of the triangle's 2nd vertex.
+- ind_v3 (INT): The index of the triangle's 3rd vertex.
+- ind_bary (FLOAT_VECTOR): The 3 barycentric weights (u, v, w) that describe exactly where the point is located between those 3 vertices.
+- ind_dist (FLOAT): The distance the point is hovering above the mesh.
+
+### 2. Geometry Nodes Interpolation
+The dynamically generated Geometry Nodes modifier no longer uses Sample UV Surface. 
+Instead, it uses Sample Index (set to the POINT domain) to pull the exact Position and Normal data of ind_v1, ind_v2, and ind_v3 directly from the deforming mesh geometry.
+
+It then does the math in real-time:
+Final Position = (Pos1 * U) + (Pos2 * V) + (Pos3 * W)
+Final Normal = Normalize( (Norm1 * U) + (Norm2 * V) + (Norm3 * W) )
+
+Because it samples Normals from the POINT domain, it inherits Blender's native "Smooth Shading", perfectly smoothing out the stroke's offset across hard polygon edges.
