@@ -31,11 +31,22 @@ def get_layer_targets(gp_obj, layer_name):
             break
     return targets
 
-def create_sticky_gn_modifier(gp_obj, target_dict):
+def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
     mod_name = "Sticky_GP"
-    
-    # Always delete the old node group and modifier to ensure a fresh setup
     group_name = f"Sticky_GP_Nodes_{gp_obj.name}"
+    
+    # Create a string hash of the current required targets
+    target_hash = ",".join(sorted([obj.name for obj in target_dict.keys()]))
+    
+    # OPTIMIZATION: If we aren't forcing a rebuild (e.g. from addon reload), 
+    # check if the existing nodes already support the exact same targets.
+    if not force_rebuild:
+        if mod_name in gp_obj.modifiers and group_name in bpy.data.node_groups:
+            existing_group = bpy.data.node_groups[group_name]
+            if existing_group.get("sticky_gp_targets") == target_hash:
+                return # Skip rebuild, existing GN modifier is perfectly valid
+    
+    # If we reached here, a rebuild is required. Nuke the old ones.
     if group_name in bpy.data.node_groups:
         bpy.data.node_groups.remove(bpy.data.node_groups[group_name])
         
@@ -45,6 +56,7 @@ def create_sticky_gn_modifier(gp_obj, target_dict):
     mod = gp_obj.modifiers.new(name=mod_name, type='NODES')
     
     node_group = bpy.data.node_groups.new(group_name, 'GeometryNodeTree')
+    node_group["sticky_gp_targets"] = target_hash  # Save the hash for future checks
     node_group.interface.new_socket("Geometry", in_out='INPUT', socket_type='NodeSocketGeometry')
     node_group.interface.new_socket("Geometry", in_out='OUTPUT', socket_type='NodeSocketGeometry')
     
@@ -595,7 +607,7 @@ def auto_rebuild_gn_on_reload():
                                 target_dict[target] = idx
                                 idx += 1
                 if target_dict:
-                    create_sticky_gn_modifier(obj, target_dict)
+                    create_sticky_gn_modifier(obj, target_dict, force_rebuild=True)
     return None
 
 def register():
