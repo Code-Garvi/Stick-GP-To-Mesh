@@ -582,11 +582,11 @@ class STICKYGP_PT_panel(bpy.types.Panel):
         if context.scene.stickygp_show_guide:
             help_box = layout.box()
             col = help_box.column(align=True)
-            col.label(text="• Setup: Assign a Target Mesh or Collection.")
-            col.label(text="• Draw: Draw strokes anywhere near the target.")
-            col.label(text="• Bind / Unbind: Attach strokes, or detach them.")
-            col.label(text="• Tweak: Use 'Global Offset' to fix clipping.")
-            col.label(text="• Fix: Click red warning to re-bake if mesh changes.")
+            col.label(text="- Setup: Assign a Target Mesh or Collection.")
+            col.label(text="- Draw: Draw strokes anywhere near the target.")
+            col.label(text="- Bind / Unbind: Attach strokes, or detach them.")
+            col.label(text="- Tweak: Use 'Global Offset' to fix clipping.")
+            col.label(text="- Fix: Click red warning to re-bake if mesh changes.")
 
 
 class STICKYGP_LayerTarget(bpy.types.PropertyGroup):
