@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (1, 5),
+    "version": (1, 6),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -72,9 +72,6 @@ def generate_sticky_uvs(obj):
             u = u_base + (step / 2) + coords_2d[i][0] * scale
             v = v_base + (step / 2) + coords_2d[i][1] * scale
             uv_layer.data[loop_idx].uv = (u, v)
-            
-    mesh["sticky_gp_poly_count"] = poly_count
-    mesh["sticky_gp_vert_count"] = len(mesh.vertices)
 
 def create_sticky_gn_modifier(gp_obj, target_obj):
     mod_name = "Sticky_GP"
@@ -209,7 +206,7 @@ def create_sticky_gn_modifier(gp_obj, target_obj):
         if node.type == 'OBJECT_INFO':
             node.inputs['Object'].default_value = target_obj
 
-def bind_unbound_strokes(gp_obj, target_obj):
+def bind_unbound_strokes(gp_obj, target_obj, frame_num=None):
     if "Sticky_GP_UVMap" not in target_obj.data.uv_layers:
         generate_sticky_uvs(target_obj)
 
@@ -238,8 +235,22 @@ def bind_unbound_strokes(gp_obj, target_obj):
     gp_to_target = world_to_target @ gp_to_world
     
     bound_count = 0
+    current_scene_frame = bpy.context.scene.frame_current
     for layer in gp_data.layers:
+        target_frames = set()
+        if frame_num is not None:
+            target_frames.add(frame_num)
+        else:
+            active_f_num = -999999
+            for f in layer.frames:
+                if f.frame_number <= current_scene_frame and f.frame_number > active_f_num:
+                    active_f_num = f.frame_number
+            if active_f_num != -999999:
+                target_frames.add(active_f_num)
+                
         for frame in layer.frames:
+            if frame.frame_number not in target_frames:
+                continue
             drawing = frame.drawing
             
             if 'bind_uv' not in drawing.attributes:
@@ -284,15 +295,28 @@ def bind_unbound_strokes(gp_obj, target_obj):
     bm.free()
     target_obj.evaluated_get(depsgraph).to_mesh_clear()
     
+    target_obj.sticky_gp_polycount = len(target_obj.data.polygons)
     return bound_count
 
-def unbind_strokes_on_frame(gp_obj, frame_num):
+def unbind_strokes_on_frame(gp_obj, frame_num=None):
     gp_data = gp_obj.data
     unbound_count = 0
+    current_scene_frame = bpy.context.scene.frame_current
     
     for layer in gp_data.layers:
+        target_frames = set()
+        if frame_num is not None:
+            target_frames.add(frame_num)
+        else:
+            active_f_num = -999999
+            for f in layer.frames:
+                if f.frame_number <= current_scene_frame and f.frame_number > active_f_num:
+                    active_f_num = f.frame_number
+            if active_f_num != -999999:
+                target_frames.add(active_f_num)
+                
         for frame in layer.frames:
-            if frame.frame_number == frame_num:
+            if frame.frame_number in target_frames:
                 drawing = frame.drawing
                 if 'is_bound' in drawing.attributes:
                     attr_bound = drawing.attributes['is_bound'].data
@@ -306,7 +330,7 @@ def unbind_strokes_on_frame(gp_obj, frame_num):
 class STICKYGP_OT_bind(bpy.types.Operator):
     """Bind newly drawn GP strokes to the target mesh"""
     bl_idname = "object.bind_sticky_gp"
-    bl_label = "Bind New Strokes"
+    bl_label = "Bind Visible Strokes"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -324,9 +348,9 @@ class STICKYGP_OT_bind(bpy.types.Operator):
         return {'FINISHED'}
 
 class STICKYGP_OT_unbind(bpy.types.Operator):
-    """Unbind all GP strokes on the current frame"""
+    """Unbind all visible GP strokes"""
     bl_idname = "object.unbind_sticky_gp"
-    bl_label = "Unbind Current Frame"
+    bl_label = "Unbind Visible Strokes"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -335,17 +359,16 @@ class STICKYGP_OT_unbind(bpy.types.Operator):
 
     def execute(self, context):
         gp_obj = context.active_object
-        frame_num = context.scene.frame_current
         
-        count = unbind_strokes_on_frame(gp_obj, frame_num)
+        count = unbind_strokes_on_frame(gp_obj)
         
-        self.report({'INFO'}, f"Unbound {count} stroke points on frame {frame_num}")
+        self.report({'INFO'}, f"Unbound {count} visible stroke points")
         return {'FINISHED'}
 
-class STICKYGP_OT_fix_topology(bpy.types.Operator):
-    """Automatically fixes all strokes across all frames after you edit the target mesh geometry"""
-    bl_idname = "object.sticky_gp_fix_topology"
-    bl_label = "Fix Strokes & UVs"
+class STICKYGP_OT_fix_strokes(bpy.types.Operator):
+    """Mesh changed! Regenerate UVs and restick all existing keyframes"""
+    bl_idname = "object.fix_sticky_gp_strokes"
+    bl_label = "Fix Strokes (Mesh Changed)"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -358,25 +381,36 @@ class STICKYGP_OT_fix_topology(bpy.types.Operator):
         target_obj = gp_obj.sticky_gp_target
         
         generate_sticky_uvs(target_obj)
-        create_sticky_gn_modifier(gp_obj, target_obj)
         
-        frames_with_strokes = set()
+        # Collect all unique frames that have strokes
+        frame_nums = set()
         for layer in gp_obj.data.layers:
-            for f in layer.frames:
-                frames_with_strokes.add(f.frame_number)
+            for frame in layer.frames:
+                frame_nums.add(frame.frame_number)
                 
-        orig_frame = context.scene.frame_current
-        total_bound = 0
+        original_frame = context.scene.frame_current
         
-        for f_num in sorted(frames_with_strokes):
+        rebound_count = 0
+        for f_num in sorted(list(frame_nums)):
             context.scene.frame_set(f_num)
-            unbind_strokes_on_frame(gp_obj, f_num)
-            count = bind_unbound_strokes(gp_obj, target_obj)
-            total_bound += count
             
-        context.scene.frame_set(orig_frame)
+            # Unbind strokes on this frame
+            for layer in gp_obj.data.layers:
+                for frame in layer.frames:
+                    if frame.frame_number == f_num:
+                        drawing = frame.drawing
+                        if 'is_bound' in drawing.attributes:
+                            attr_bound = drawing.attributes['is_bound'].data
+                            for i in range(len(attr_bound)):
+                                attr_bound[i].value = False
+                                
+            # Rebind on this frame
+            rebound_count += bind_unbound_strokes(gp_obj, target_obj, f_num)
+            
+        context.scene.frame_set(original_frame)
+        target_obj.sticky_gp_polycount = len(target_obj.data.polygons)
         
-        self.report({'INFO'}, f"Successfully fixed topology and rebound {total_bound} stroke points.")
+        self.report({'INFO'}, f"Fixed {rebound_count} stroke points after mesh change.")
         return {'FINISHED'}
 
 class STICKYGP_PT_panel(bpy.types.Panel):
@@ -396,52 +430,53 @@ class STICKYGP_PT_panel(bpy.types.Panel):
             layout.label(text="Please select a GPencil object.", icon='ERROR')
             return
         
-        if target_obj:
-            mesh = target_obj.data
-            current_poly = len(mesh.polygons)
-            current_vert = len(mesh.vertices)
+        row = layout.row()
+        row.operator("object.bind_sticky_gp")
+        
+        row = layout.row()
+        row.operator("object.unbind_sticky_gp")
+
+        if target_obj and len(target_obj.data.polygons) != target_obj.sticky_gp_polycount:
+            row = layout.row()
+            row.alert = True
+            row.operator("object.fix_sticky_gp_strokes", icon='ERROR')
             
-            baked_poly = mesh.get("sticky_gp_poly_count", -1)
-            baked_vert = mesh.get("sticky_gp_vert_count", -1)
-            
-            if baked_poly == -1 or (current_poly == baked_poly and current_vert == baked_vert):
-                row = layout.row()
-                row.operator("object.bind_sticky_gp")
-                
-                row = layout.row()
-                row.operator("object.unbind_sticky_gp")
-            else:
-                layout.label(text="WARNING: Mesh Topology Changed!", icon='ERROR')
-                row = layout.row()
-                row.scale_y = 1.5
-                row.operator("object.sticky_gp_fix_topology", icon='FILE_REFRESH')
-                
-            layout.separator()
-            box = layout.box()
-            box.label(text="Workflow Instructions:", icon='INFO')
-            box.label(text="1. Draw strokes normally.")
-            box.label(text="2. Click 'Bind New Strokes'.")
-            box.label(text="3. Only use 'Fix Strokes' if you")
-            box.label(text="   add/delete mesh geometry.")
+        layout.separator()
+        box = layout.box()
+        box.label(text="How to Use:", icon='INFO')
+        col = box.column(align=True)
+        col.label(text="1. Select your target mesh above.")
+        col.label(text="2. Draw on your character.")
+        col.label(text="3. Click 'Bind Visible Strokes'.")
+        col.label(text="4. Sculpt and animate freely!")
+        col.label(text="Note: If you add/delete polygons,")
+        col.label(text="the red Fix Strokes button will")
+        col.label(text="appear. Click it to auto-fix!")
 
 
 def register():
     bpy.utils.register_class(STICKYGP_OT_bind)
     bpy.utils.register_class(STICKYGP_OT_unbind)
-    bpy.utils.register_class(STICKYGP_OT_fix_topology)
+    bpy.utils.register_class(STICKYGP_OT_fix_strokes)
     bpy.utils.register_class(STICKYGP_PT_panel)
     bpy.types.Object.sticky_gp_target = bpy.props.PointerProperty(
         name="Target Mesh",
         type=bpy.types.Object,
         description="The mesh to stick the Grease Pencil strokes to"
     )
+    bpy.types.Object.sticky_gp_polycount = bpy.props.IntProperty(
+        name="Polycount Cache",
+        default=0,
+        description="Tracks the last known polycount of the mesh to detect topological changes"
+    )
 
 def unregister():
     bpy.utils.unregister_class(STICKYGP_OT_bind)
     bpy.utils.unregister_class(STICKYGP_OT_unbind)
-    bpy.utils.unregister_class(STICKYGP_OT_fix_topology)
+    bpy.utils.unregister_class(STICKYGP_OT_fix_strokes)
     bpy.utils.unregister_class(STICKYGP_PT_panel)
     del bpy.types.Object.sticky_gp_target
+    del bpy.types.Object.sticky_gp_polycount
 
 if __name__ == "__main__":
     register()
