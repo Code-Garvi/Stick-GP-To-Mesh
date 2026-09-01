@@ -1,5 +1,10 @@
 # Sticky GP - Complete Changelog
 
+## V2.2.1
+- **[MODIFIED]** Replaced the bulky UI instructions block in the N-Panel with a clean, collapsible "Quick Guide" toggle, saving permanent vertical screen space.
+- **[MODIFIED]** Expanded the quick guide to include instructions on the "Unbind" feature.
+- **[FIX]** Resolved a strict UTF-8 Unicode decoding error that caused crashes when loading the addon if certain system encoding defaults (like `cp1252`) wrote invalid bullet point characters.
+
 ## V2.2 (Workflow & UX Update)
 - **[NEW]** Global Offset Slider: Added a slider to the N-Panel (ranging from -1 to 1) that pushes all bound strokes outwards or inwards globally to prevent clipping with the target mesh. The Geometry Nodes math was dynamically updated to support this.
 - **[NEW]** Real-Time Viewport Feedback: Connected a python `update_offset` callback hook that instantly passes the N-Panel UI slider values into the Geometry Nodes modifier for real-time visual tweaking.
