@@ -33,14 +33,16 @@ def get_layer_targets(gp_obj, layer_name):
 
 def create_sticky_gn_modifier(gp_obj, target_dict):
     mod_name = "Sticky_GP"
-    if mod_name in gp_obj.modifiers:
-        mod = gp_obj.modifiers[mod_name]
-    else:
-        mod = gp_obj.modifiers.new(name=mod_name, type='NODES')
     
+    # Always delete the old node group and modifier to ensure a fresh setup
     group_name = f"Sticky_GP_Nodes_{gp_obj.name}"
     if group_name in bpy.data.node_groups:
         bpy.data.node_groups.remove(bpy.data.node_groups[group_name])
+        
+    if mod_name in gp_obj.modifiers:
+        gp_obj.modifiers.remove(gp_obj.modifiers[mod_name])
+        
+    mod = gp_obj.modifiers.new(name=mod_name, type='NODES')
     
     node_group = bpy.data.node_groups.new(group_name, 'GeometryNodeTree')
     node_group.interface.new_socket("Geometry", in_out='INPUT', socket_type='NodeSocketGeometry')
@@ -577,8 +579,29 @@ class STICKYGP_LayerTarget(bpy.types.PropertyGroup):
         description="Select the collection of meshes to stick this layer's strokes to"
     )
 
+
+def auto_rebuild_gn_on_reload():
+    # Only run once on reload
+    for obj in bpy.data.objects:
+        if obj.type in {'GREASEPENCIL', 'GREASEPENCIL_V3'} or obj.type.startswith('GREASEPENCIL'):
+            if "Sticky_GP" in obj.modifiers:
+                target_dict = {}
+                idx = 1
+                if hasattr(obj.data, 'layers'):
+                    for layer in obj.data.layers:
+                        targets = get_layer_targets(obj, layer.name)
+                        for target in targets:
+                            if target not in target_dict:
+                                target_dict[target] = idx
+                                idx += 1
+                if target_dict:
+                    create_sticky_gn_modifier(obj, target_dict)
+    return None
+
 def register():
     bpy.utils.register_class(STICKYGP_LayerTarget)
+    if bpy.app.background is False:
+        bpy.app.timers.register(auto_rebuild_gn_on_reload, first_interval=0.1)
     bpy.utils.register_class(STICKYGP_OT_add_layer_target)
     bpy.utils.register_class(STICKYGP_OT_bind)
     bpy.utils.register_class(STICKYGP_OT_unbind)
