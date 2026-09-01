@@ -1,0 +1,9 @@
+# Sticky GP V8 Changelog
+
+[NEW] Per-Layer Multi-Mesh Support! You can now stick 'Layer 1' to 'Mesh A', and 'Layer 2' to 'Mesh B'.
+[NEW] N-Panel UI redesign: Shows a list of all your GP Layers with individual 'Assign Mesh' target slots.
+[NEW] Dynamic Geometry Nodes compiler: Re-written GN modifier generation from scratch. It now acts as a multi-mesh router, seamlessly piping deformations from multiple meshes simultaneously based on a baked 'secret id' index per layer.
+[MODIFIED] UI Panel drawing loop: Fixed Blender exception "Writing to ID classes in this context is not allowed" by introducing an explicit 'Assign Mesh' button for new layers, preventing data mutation during UI draws.
+[MODIFIED] Property Registration: Removed 'bpy.types.Object.sticky_gp_target'. Replaced with a scalable 'CollectionProperty' mapping layer names to target meshes.
+[MODIFIED] Smart Polycount Tracker: Now loops over all assigned layer meshes simultaneously. If ANY target mesh is edited, the Fix Strokes button appears globally.
+[MODIFIED] Fix Strokes operator: Automatically iterates through all unique target meshes to regenerate their UVs before looping over the timeline to rebind.
