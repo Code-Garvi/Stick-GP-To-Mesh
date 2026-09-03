@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (2, 2, 1),
+    "version": (2, 2, 2),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -398,6 +398,13 @@ def unbind_strokes_on_frame(gp_obj, frame_num=None):
                             attr_bound[i].value = False
                             unbound_count += 1
                             
+    # Force depsgraph update for backward compatibility (Blender 4.3 - 4.5)
+    if unbound_count > 0:
+        if hasattr(gp_obj.data, "update_tag"):
+            gp_obj.data.update_tag()
+        if hasattr(gp_obj, "update_tag"):
+            gp_obj.update_tag()
+            
     return unbound_count
 
 class STICKYGP_OT_bind(bpy.types.Operator):
@@ -680,5 +687,6 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
 
 
