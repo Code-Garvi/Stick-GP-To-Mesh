@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (2, 2, 2),
+    "version": (2, 3, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -280,8 +280,9 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
         gp_to_world = gp_obj.matrix_world
         world_to_target = target_obj.matrix_world.inverted()
         gp_to_target = world_to_target @ gp_to_world
+        target_to_gp = gp_to_target.inverted()
         
-        bvh_cache[target_obj] = (bvh, bm, gp_to_target)
+        bvh_cache[target_obj] = (bvh, bm, gp_to_target, target_to_gp)
 
     bound_count = 0
     current_scene_frame = bpy.context.scene.frame_current
@@ -339,13 +340,18 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
                         best_match = None
                         
                         for target_obj in target_objs:
-                            bvh, bm, gp_to_target = bvh_cache[target_obj]
+                            bvh, bm, gp_to_target, target_to_gp = bvh_cache[target_obj]
                             pos_target = gp_to_target @ pos_gp
-                            location, normal, index, distance = bvh.find_nearest(pos_target)
+                            location, normal, index, local_dist = bvh.find_nearest(pos_target)
                             
-                            if location is not None and distance < best_dist:
-                                best_dist = distance
-                                best_match = (target_obj, location, index, distance, bm)
+                            if location is not None:
+                                # Convert surface location back to GP's space to measure true scale-agnostic distance
+                                location_gp = target_to_gp @ location
+                                true_distance = (pos_gp - location_gp).length
+                                
+                                if true_distance < best_dist:
+                                    best_dist = true_distance
+                                    best_match = (target_obj, location, index, true_distance, bm)
                                 
                         if best_match is not None:
                             target_obj, location, index, distance, bm = best_match
@@ -687,6 +693,7 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
 
 
 
