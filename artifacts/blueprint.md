@@ -61,3 +61,4 @@ To solve testing workflow issues, a background timer hook (`auto_rebuild_gn_on_r
 - **V2.0 (Pure Barycentric Paradigm):** Deleted the UV dependency. Moved entirely to vertex indices (`bind_v1`, `v2`, `v3`) and barycentric weights, solving shading and precision issues.
 - **V2.1 (Collection Binding):** Introduced the ability to assign an entire collection to a layer, enabling strokes to automatically bind across multiple overlapping meshes seamlessly.
 - **V2.2 (Workflow & Offset Update):** Introduced the Global Offset slider driven via python updates, automated target hashing to skip redundant modifier recompilation, and an automated background hook for instant developer hot-reloading.
+- **V2.3 (Native UI Update):** Upgraded the N-Panel bound object list to a native Blender `template_list` with a dedicated collapsible sub-panel for better integration, visual consistency, and direct object renaming.

@@ -1,5 +1,10 @@
 # Sticky GP - Complete Changelog
 
+## V2.3 (UI & Native Aesthetics Update)
+- **[MODIFIED]** Replaced the custom operator-based "Bound GP Objects" list with a native Blender `template_list` UI implementation, seamlessly syncing with viewport selection.
+- **[NEW]** Bound GP Objects section is now structured as a native collapsible sub-panel, significantly improving N-panel space management.
+- **[MODIFIED]** Upgraded list items to property fields, enabling direct object renaming from within the N-Panel UI list.
+
 ## V2.2.1
 - **[MODIFIED]** Replaced the bulky UI instructions block in the N-Panel with a clean, collapsible "Quick Guide" toggle, saving permanent vertical screen space.
 - **[MODIFIED]** Expanded the quick guide to include instructions on the "Unbind" feature.

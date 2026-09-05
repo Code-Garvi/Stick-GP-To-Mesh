@@ -521,6 +521,25 @@ class STICKYGP_OT_add_layer_target(bpy.types.Operator):
         item.layer_name = self.layer_name
         return {'FINISHED'}
 
+class STICKYGP_UL_bound_objects(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        is_active = (context.active_object == item)
+        icon = 'GREASEPENCIL' if not is_active else 'RESTRICT_SELECT_OFF'
+        layout.prop(item, "name", text="", icon=icon, emboss=False)
+
+    def filter_items(self, context, data, propname):
+        objects = getattr(data, propname)
+        flt_flags = []
+        flt_neworder = []
+        
+        for obj in objects:
+            if obj.type in {'GREASEPENCIL', 'GREASEPENCIL_V3'} and "Sticky_GP" in obj.modifiers:
+                flt_flags.append(self.bitflag_filter_item)
+            else:
+                flt_flags.append(0)
+                
+        return flt_flags, flt_neworder
+
 class STICKYGP_PT_panel(bpy.types.Panel):
     """Creates a Panel in the scene context of the properties editor"""
     bl_label = "Sticky GP"
@@ -531,6 +550,16 @@ class STICKYGP_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        scene = context.scene
+        active_obj = context.active_object
+        
+        # Determine if we are in valid context
+        is_valid_context = active_obj and active_obj.type in {'MESH', 'GREASEPENCIL', 'GREASEPENCIL_V3'}
+        
+        if not is_valid_context:
+            layout.label(text="Select a Mesh or GP object", icon='INFO')
+            return
+
         obj = context.active_object
         
         if not obj or obj.type != 'GREASEPENCIL':
@@ -594,13 +623,37 @@ class STICKYGP_PT_panel(bpy.types.Panel):
         row.prop(context.scene, "stickygp_show_guide", icon=icon, emboss=False)
         if context.scene.stickygp_show_guide:
             help_box = layout.box()
-            col = help_box.column(align=True)
-            col.label(text="- Setup: Assign a Target Mesh or Collection.")
-            col.label(text="- Draw: Draw strokes anywhere near the target.")
-            col.label(text="- Bind / Unbind: Attach strokes, or detach them.")
-            col.label(text="- Tweak: Use 'Global Offset' to fix clipping.")
-            col.label(text="- Fix: Click red warning to re-bake if mesh changes.")
+            help_box.label(text="1. Select Mesh")
+            help_box.label(text="2. Add Sticky GP Layer Target")
+            help_box.label(text="3. Assign target object")
+            help_box.label(text="4. Draw strokes on the surface!")
 
+class STICKYGP_PT_bound_objects(bpy.types.Panel):
+    bl_label = "Bound GP Objects"
+    bl_idname = "STICKYGP_PT_bound_objects"
+    bl_parent_id = "STICKYGP_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    
+    @classmethod
+    def poll(cls, context):
+        bound_gp_objects = [
+            obj for obj in context.scene.objects
+            if obj.type in {'GREASEPENCIL', 'GREASEPENCIL_V3'} and "Sticky_GP" in obj.modifiers
+        ]
+        return len(bound_gp_objects) > 0
+
+    def draw(self, context):
+        layout = self.layout
+        layout.template_list(
+            "STICKYGP_UL_bound_objects",
+            "",
+            context.scene,
+            "objects",
+            context.scene,
+            "stickygp_bound_objects_index",
+            rows=3
+        )
 
 class STICKYGP_LayerTarget(bpy.types.PropertyGroup):
     layer_name: bpy.props.StringProperty()
@@ -647,15 +700,39 @@ def update_offset(self, context):
             if "GlobalOffsetValue" in node_group.nodes:
                 node_group.nodes["GlobalOffsetValue"].outputs[0].default_value = self.sticky_gp_global_offset
 
+def on_bound_objects_index_update(self, context):
+    idx = self.stickygp_bound_objects_index
+    if 0 <= idx < len(self.objects):
+        obj = self.objects[idx]
+        if obj.type in {'GREASEPENCIL', 'GREASEPENCIL_V3'} and "Sticky_GP" in obj.modifiers:
+            if context.view_layer.objects.active != obj:
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                context.view_layer.objects.active = obj
+
+@bpy.app.handlers.persistent
+def sync_bound_objects_index(scene, depsgraph):
+    active_obj = bpy.context.active_object
+    if active_obj and active_obj.type in {'GREASEPENCIL', 'GREASEPENCIL_V3'} and "Sticky_GP" in active_obj.modifiers:
+        idx = scene.objects.find(active_obj.name)
+        if idx != -1 and scene.stickygp_bound_objects_index != idx:
+            scene.stickygp_bound_objects_index = idx
+
 def register():
     bpy.utils.register_class(STICKYGP_LayerTarget)
     if bpy.app.background is False:
         bpy.app.timers.register(auto_rebuild_gn_on_reload, first_interval=0.1)
+    
+    if sync_bound_objects_index not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(sync_bound_objects_index)
+        
+    bpy.utils.register_class(STICKYGP_UL_bound_objects)
     bpy.utils.register_class(STICKYGP_OT_add_layer_target)
     bpy.utils.register_class(STICKYGP_OT_bind)
     bpy.utils.register_class(STICKYGP_OT_unbind)
     bpy.utils.register_class(STICKYGP_OT_fix_strokes)
     bpy.utils.register_class(STICKYGP_PT_panel)
+    bpy.utils.register_class(STICKYGP_PT_bound_objects)
     bpy.types.Object.sticky_gp_layer_targets = bpy.props.CollectionProperty(
         type=STICKYGP_LayerTarget,
         name="Layer Targets"
@@ -677,16 +754,29 @@ def register():
         name="Quick Guide",
         default=False
     )
+    bpy.types.Scene.stickygp_bound_objects_index = bpy.props.IntProperty(
+        name="Bound Objects List Index",
+        update=on_bound_objects_index_update,
+        options={'SKIP_SAVE'}
+    )
 
 def unregister():
+    if sync_bound_objects_index in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(sync_bound_objects_index)
+        
     bpy.utils.unregister_class(STICKYGP_OT_bind)
     bpy.utils.unregister_class(STICKYGP_OT_unbind)
     bpy.utils.unregister_class(STICKYGP_OT_fix_strokes)
+    bpy.utils.unregister_class(STICKYGP_PT_bound_objects)
     bpy.utils.unregister_class(STICKYGP_PT_panel)
+    bpy.utils.unregister_class(STICKYGP_UL_bound_objects)
     bpy.utils.unregister_class(STICKYGP_OT_add_layer_target)
     bpy.utils.unregister_class(STICKYGP_LayerTarget)
     del bpy.types.Object.sticky_gp_layer_targets
     del bpy.types.Object.sticky_gp_polycount
+    
+    if hasattr(bpy.types.Scene, "stickygp_bound_objects_index"):
+        del bpy.types.Scene.stickygp_bound_objects_index
     
     if hasattr(bpy.types.Scene, "stickygp_show_guide"):
         del bpy.types.Scene.stickygp_show_guide
