@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sticky Grease Pencil",
     "author": "Antigravity",
-    "version": (2, 3, 0),
+    "version": (3, 0, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Sticky GP",
     "description": "Binds newly drawn Grease Pencil strokes to a deforming target mesh.",
@@ -17,6 +17,16 @@ import mathutils
 def get_evaluated_mesh(obj, depsgraph):
     eval_obj = obj.evaluated_get(depsgraph)
     return eval_obj.to_mesh()
+
+def ensure_rest_position(obj):
+    if obj.type != 'MESH': return
+    if 'rest_position' not in obj.data.attributes:
+        attr = obj.data.attributes.new(name='rest_position', type='FLOAT_VECTOR', domain='POINT')
+        import numpy as np
+        coords = np.empty((len(obj.data.vertices), 3), dtype=np.float32)
+        obj.data.vertices.foreach_get("co", coords.ravel())
+        attr.data.foreach_set("vector", coords.ravel())
+        obj.data.update_tag()
 
 def get_layer_targets(gp_obj, layer_name):
     targets = []
@@ -66,21 +76,9 @@ def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
     group_in = nodes.new('NodeGroupInput')
     group_out = nodes.new('NodeGroupOutput')
     
-    bind_v1 = nodes.new('GeometryNodeInputNamedAttribute')
-    bind_v1.data_type = 'INT'
-    bind_v1.inputs['Name'].default_value = 'bind_v1'
-    
-    bind_v2 = nodes.new('GeometryNodeInputNamedAttribute')
-    bind_v2.data_type = 'INT'
-    bind_v2.inputs['Name'].default_value = 'bind_v2'
-    
-    bind_v3 = nodes.new('GeometryNodeInputNamedAttribute')
-    bind_v3.data_type = 'INT'
-    bind_v3.inputs['Name'].default_value = 'bind_v3'
-    
-    bind_bary = nodes.new('GeometryNodeInputNamedAttribute')
-    bind_bary.data_type = 'FLOAT_VECTOR'
-    bind_bary.inputs['Name'].default_value = 'bind_bary'
+    bind_rest_pos = nodes.new('GeometryNodeInputNamedAttribute')
+    bind_rest_pos.data_type = 'FLOAT_VECTOR'
+    bind_rest_pos.inputs['Name'].default_value = 'bind_rest_pos'
     
     bind_dist = nodes.new('GeometryNodeInputNamedAttribute')
     bind_dist.data_type = 'FLOAT'
@@ -94,122 +92,94 @@ def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
     bind_target_idx.data_type = 'INT'
     bind_target_idx.inputs['Name'].default_value = 'bind_target_idx'
     
-    input_pos = nodes.new('GeometryNodeInputPosition')
-    input_normal = nodes.new('GeometryNodeInputNormal')
-    
     global_offset_node = nodes.new('ShaderNodeValue')
     global_offset_node.name = "GlobalOffsetValue"
     global_offset_node.outputs[0].default_value = gp_obj.sticky_gp_global_offset
     
-    sep_bary = nodes.new('ShaderNodeSeparateXYZ')
-    links.new(bind_bary.outputs['Attribute'], sep_bary.inputs['Vector'])
-    
     last_geom_output = group_in.outputs['Geometry']
     
     for target_obj, idx in target_dict.items():
+        # Deformed Target Mesh
         obj_info = nodes.new('GeometryNodeObjectInfo')
         obj_info.transform_space = 'RELATIVE'
         obj_info.inputs['Object'].default_value = target_obj
         
-        # Position samples
-        sp1 = nodes.new('GeometryNodeSampleIndex')
-        sp1.data_type = 'FLOAT_VECTOR'
-        sp1.domain = 'POINT'
-        links.new(obj_info.outputs['Geometry'], sp1.inputs['Geometry'])
-        links.new(input_pos.outputs['Position'], sp1.inputs['Value'])
-        links.new(bind_v1.outputs['Attribute'], sp1.inputs['Index'])
+        target_geom = obj_info.outputs['Geometry']
         
-        sp2 = nodes.new('GeometryNodeSampleIndex')
-        sp2.data_type = 'FLOAT_VECTOR'
-        sp2.domain = 'POINT'
-        links.new(obj_info.outputs['Geometry'], sp2.inputs['Geometry'])
-        links.new(input_pos.outputs['Position'], sp2.inputs['Value'])
-        links.new(bind_v2.outputs['Attribute'], sp2.inputs['Index'])
+        # Store deformed Position
+        store_pos = nodes.new('GeometryNodeStoreNamedAttribute')
+        store_pos.data_type = 'FLOAT_VECTOR'
+        store_pos.domain = 'POINT'
+        store_pos.inputs['Name'].default_value = '_deformed_pos'
+        store_pos.inputs['Value'].default_value = (0,0,0) # We will link Position to this
+        pos_input = nodes.new('GeometryNodeInputPosition')
+        links.new(target_geom, store_pos.inputs['Geometry'])
+        links.new(pos_input.outputs['Position'], store_pos.inputs['Value'])
         
-        sp3 = nodes.new('GeometryNodeSampleIndex')
-        sp3.data_type = 'FLOAT_VECTOR'
-        sp3.domain = 'POINT'
-        links.new(obj_info.outputs['Geometry'], sp3.inputs['Geometry'])
-        links.new(input_pos.outputs['Position'], sp3.inputs['Value'])
-        links.new(bind_v3.outputs['Attribute'], sp3.inputs['Index'])
+        # Store deformed Normal
+        store_norm = nodes.new('GeometryNodeStoreNamedAttribute')
+        store_norm.data_type = 'FLOAT_VECTOR'
+        store_norm.domain = 'POINT'
+        store_norm.inputs['Name'].default_value = '_deformed_normal'
+        store_norm.inputs['Value'].default_value = (0,0,0)
+        norm_input = nodes.new('GeometryNodeInputNormal')
+        links.new(store_pos.outputs['Geometry'], store_norm.inputs['Geometry'])
+        links.new(norm_input.outputs['Normal'], store_norm.inputs['Value'])
         
-        # Position math
-        m_p1 = nodes.new('ShaderNodeVectorMath')
-        m_p1.operation = 'SCALE'
-        links.new(sp1.outputs['Value'], m_p1.inputs[0])
-        links.new(sep_bary.outputs['X'], m_p1.inputs['Scale'])
+        # Snap target mesh back to rest_position
+        rest_attr = nodes.new('GeometryNodeInputNamedAttribute')
+        rest_attr.data_type = 'FLOAT_VECTOR'
+        rest_attr.inputs['Name'].default_value = 'rest_position'
         
-        m_p2 = nodes.new('ShaderNodeVectorMath')
-        m_p2.operation = 'SCALE'
-        links.new(sp2.outputs['Value'], m_p2.inputs[0])
-        links.new(sep_bary.outputs['Y'], m_p2.inputs['Scale'])
+        set_rest = nodes.new('GeometryNodeSetPosition')
+        links.new(store_norm.outputs['Geometry'], set_rest.inputs['Geometry'])
+        links.new(rest_attr.outputs['Attribute'], set_rest.inputs['Position'])
         
-        m_p3 = nodes.new('ShaderNodeVectorMath')
-        m_p3.operation = 'SCALE'
-        links.new(sp3.outputs['Value'], m_p3.inputs[0])
-        links.new(sep_bary.outputs['Z'], m_p3.inputs['Scale'])
+        set_rest_offset = nodes.new('GeometryNodeSetPosition')
+        links.new(set_rest.outputs['Geometry'], set_rest_offset.inputs['Geometry'])
         
-        add_p12 = nodes.new('ShaderNodeVectorMath')
-        add_p12.operation = 'ADD'
-        links.new(m_p1.outputs['Vector'], add_p12.inputs[0])
-        links.new(m_p2.outputs['Vector'], add_p12.inputs[1])
+        rest_normal_node = nodes.new('GeometryNodeInputNormal')
         
-        add_p_all = nodes.new('ShaderNodeVectorMath')
-        add_p_all.operation = 'ADD'
-        links.new(add_p12.outputs['Vector'], add_p_all.inputs[0])
-        links.new(m_p3.outputs['Vector'], add_p_all.inputs[1])
+        push_math = nodes.new('ShaderNodeVectorMath')
+        push_math.operation = 'SCALE'
+        links.new(rest_normal_node.outputs['Normal'], push_math.inputs[0])
+        push_math.inputs['Scale'].default_value = 0.0001
         
-        # Normal samples
-        sn1 = nodes.new('GeometryNodeSampleIndex')
-        sn1.data_type = 'FLOAT_VECTOR'
-        sn1.domain = 'POINT'
-        links.new(obj_info.outputs['Geometry'], sn1.inputs['Geometry'])
-        links.new(input_normal.outputs['Normal'], sn1.inputs['Value'])
-        links.new(bind_v1.outputs['Attribute'], sn1.inputs['Index'])
+        links.new(push_math.outputs['Vector'], set_rest_offset.inputs['Offset'])
         
-        sn2 = nodes.new('GeometryNodeSampleIndex')
-        sn2.data_type = 'FLOAT_VECTOR'
-        sn2.domain = 'POINT'
-        links.new(obj_info.outputs['Geometry'], sn2.inputs['Geometry'])
-        links.new(input_normal.outputs['Normal'], sn2.inputs['Value'])
-        links.new(bind_v2.outputs['Attribute'], sn2.inputs['Index'])
+        rest_target_geom = set_rest_offset.outputs['Geometry']
         
-        sn3 = nodes.new('GeometryNodeSampleIndex')
-        sn3.data_type = 'FLOAT_VECTOR'
-        sn3.domain = 'POINT'
-        links.new(obj_info.outputs['Geometry'], sn3.inputs['Geometry'])
-        links.new(input_normal.outputs['Normal'], sn3.inputs['Value'])
-        links.new(bind_v3.outputs['Attribute'], sn3.inputs['Index'])
+        # Sample Nearest Surface on Rest Mesh
+        sample_pos = nodes.new('GeometryNodeSampleNearestSurface')
+        sample_pos.data_type = 'FLOAT_VECTOR'
+        links.new(rest_target_geom, sample_pos.inputs['Mesh'])
         
-        # Normal math
-        m_n1 = nodes.new('ShaderNodeVectorMath')
-        m_n1.operation = 'SCALE'
-        links.new(sn1.outputs['Value'], m_n1.inputs[0])
-        links.new(sep_bary.outputs['X'], m_n1.inputs['Scale'])
+        deformed_pos_attr = nodes.new('GeometryNodeInputNamedAttribute')
+        deformed_pos_attr.data_type = 'FLOAT_VECTOR'
+        deformed_pos_attr.inputs['Name'].default_value = '_deformed_pos'
         
-        m_n2 = nodes.new('ShaderNodeVectorMath')
-        m_n2.operation = 'SCALE'
-        links.new(sn2.outputs['Value'], m_n2.inputs[0])
-        links.new(sep_bary.outputs['Y'], m_n2.inputs['Scale'])
+        links.new(deformed_pos_attr.outputs['Attribute'], sample_pos.inputs['Value'])
+        links.new(bind_rest_pos.outputs['Attribute'], sample_pos.inputs['Sample Position'])
         
-        m_n3 = nodes.new('ShaderNodeVectorMath')
-        m_n3.operation = 'SCALE'
-        links.new(sn3.outputs['Value'], m_n3.inputs[0])
-        links.new(sep_bary.outputs['Z'], m_n3.inputs['Scale'])
+        sampled_deformed_pos = sample_pos.outputs['Value']
         
-        add_n12 = nodes.new('ShaderNodeVectorMath')
-        add_n12.operation = 'ADD'
-        links.new(m_n1.outputs['Vector'], add_n12.inputs[0])
-        links.new(m_n2.outputs['Vector'], add_n12.inputs[1])
+        sample_norm = nodes.new('GeometryNodeSampleNearestSurface')
+        sample_norm.data_type = 'FLOAT_VECTOR'
+        links.new(rest_target_geom, sample_norm.inputs['Mesh'])
         
-        add_n_all = nodes.new('ShaderNodeVectorMath')
-        add_n_all.operation = 'ADD'
-        links.new(add_n12.outputs['Vector'], add_n_all.inputs[0])
-        links.new(m_n3.outputs['Vector'], add_n_all.inputs[1])
+        deformed_norm_attr = nodes.new('GeometryNodeInputNamedAttribute')
+        deformed_norm_attr.data_type = 'FLOAT_VECTOR'
+        deformed_norm_attr.inputs['Name'].default_value = '_deformed_normal'
         
+        links.new(deformed_norm_attr.outputs['Attribute'], sample_norm.inputs['Value'])
+        links.new(bind_rest_pos.outputs['Attribute'], sample_norm.inputs['Sample Position'])
+        
+        sampled_deformed_norm = sample_norm.outputs['Value']
+        
+        # Normalize the sampled normal
         norm_n = nodes.new('ShaderNodeVectorMath')
         norm_n.operation = 'NORMALIZE'
-        links.new(add_n_all.outputs['Vector'], norm_n.inputs[0])
+        links.new(sampled_deformed_norm, norm_n.inputs[0])
         
         # Offset pos
         scale_dist = nodes.new('ShaderNodeVectorMath')
@@ -224,7 +194,7 @@ def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
         
         final_pos = nodes.new('ShaderNodeVectorMath')
         final_pos.operation = 'ADD'
-        links.new(add_p_all.outputs['Vector'], final_pos.inputs[0])
+        links.new(sampled_deformed_pos, final_pos.inputs[0])
         links.new(scale_dist.outputs['Vector'], final_pos.inputs[1])
         
         # Routing
@@ -248,7 +218,6 @@ def create_sticky_gn_modifier(gp_obj, target_dict, force_rebuild=False):
         
     links.new(last_geom_output, group_out.inputs['Geometry'])
     mod.node_group = node_group
-
 def bind_unbound_strokes(gp_obj, frame_num=None):
     gp_data = gp_obj.data
     
@@ -258,6 +227,7 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
         targets = get_layer_targets(gp_obj, layer.name)
         for target in targets:
             if target not in target_dict:
+                ensure_rest_position(target)
                 target_dict[target] = idx
                 idx += 1
                 
@@ -271,6 +241,16 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
     
     for target_obj in target_dict.keys():
         mesh = get_evaluated_mesh(target_obj, depsgraph)
+        
+        if 'rest_position' in mesh.attributes:
+            rest_pos_attr = mesh.attributes['rest_position'].data
+        else:
+            # Fallback if somehow update_tag didn't push it to the evaluated mesh yet
+            ensure_rest_position(target_obj)
+            depsgraph.update()
+            mesh = get_evaluated_mesh(target_obj, depsgraph)
+            rest_pos_attr = mesh.attributes['rest_position'].data
+            
         bm = bmesh.new()
         bm.from_mesh(mesh)
         bmesh.ops.triangulate(bm, faces=bm.faces)
@@ -282,7 +262,7 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
         gp_to_target = world_to_target @ gp_to_world
         target_to_gp = gp_to_target.inverted()
         
-        bvh_cache[target_obj] = (bvh, bm, gp_to_target, target_to_gp)
+        bvh_cache[target_obj] = (bvh, bm, gp_to_target, target_to_gp, rest_pos_attr)
 
     bound_count = 0
     current_scene_frame = bpy.context.scene.frame_current
@@ -307,14 +287,8 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
                 continue
             drawing = frame.drawing
             
-            if 'bind_v1' not in drawing.attributes:
-                drawing.attributes.new(name='bind_v1', type='INT', domain='POINT')
-            if 'bind_v2' not in drawing.attributes:
-                drawing.attributes.new(name='bind_v2', type='INT', domain='POINT')
-            if 'bind_v3' not in drawing.attributes:
-                drawing.attributes.new(name='bind_v3', type='INT', domain='POINT')
-            if 'bind_bary' not in drawing.attributes:
-                drawing.attributes.new(name='bind_bary', type='FLOAT_VECTOR', domain='POINT')
+            if 'bind_rest_pos' not in drawing.attributes:
+                drawing.attributes.new(name='bind_rest_pos', type='FLOAT_VECTOR', domain='POINT')
             if 'bind_dist' not in drawing.attributes:
                 drawing.attributes.new(name='bind_dist', type='FLOAT', domain='POINT')
             if 'is_bound' not in drawing.attributes:
@@ -322,10 +296,7 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
             if 'bind_target_idx' not in drawing.attributes:
                 drawing.attributes.new(name='bind_target_idx', type='INT', domain='POINT')
                 
-            attr_v1 = drawing.attributes['bind_v1'].data
-            attr_v2 = drawing.attributes['bind_v2'].data
-            attr_v3 = drawing.attributes['bind_v3'].data
-            attr_bary = drawing.attributes['bind_bary'].data
+            attr_rest_pos = drawing.attributes['bind_rest_pos'].data
             attr_dist = drawing.attributes['bind_dist'].data
             attr_bound = drawing.attributes['is_bound'].data
             attr_target_idx = drawing.attributes['bind_target_idx'].data
@@ -340,7 +311,7 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
                         best_match = None
                         
                         for target_obj in target_objs:
-                            bvh, bm, gp_to_target, target_to_gp = bvh_cache[target_obj]
+                            bvh, bm, gp_to_target, target_to_gp, rest_pos_attr = bvh_cache[target_obj]
                             pos_target = gp_to_target @ pos_gp
                             location, normal, index, local_dist = bvh.find_nearest(pos_target)
                             
@@ -358,13 +329,23 @@ def bind_unbound_strokes(gp_obj, frame_num=None):
                             target_idx = target_dict[target_obj]
                             
                             face = bm.faces[index]
-                            v1, v2, v3 = (v.co for v in face.verts[:3])
-                            bary = mathutils.geometry.barycentric_transform(location, v1, v2, v3, mathutils.Vector((1,0,0)), mathutils.Vector((0,1,0)), mathutils.Vector((0,0,1)))
+                            v1_eval, v2_eval, v3_eval = (v.co for v in face.verts[:3])
                             
-                            attr_v1[i].value = face.verts[0].index
-                            attr_v2[i].value = face.verts[1].index
-                            attr_v3[i].value = face.verts[2].index
-                            attr_bary[i].vector = bary
+                            bvh, bm_ref, gp_to_target, target_to_gp, rest_pos_attr = bvh_cache[target_obj]
+                            
+                            r1 = rest_pos_attr[face.verts[0].index].vector
+                            r2 = rest_pos_attr[face.verts[1].index].vector
+                            r3 = rest_pos_attr[face.verts[2].index].vector
+                            
+                            bary_rest = mathutils.geometry.barycentric_transform(location, v1_eval, v2_eval, v3_eval, r1, r2, r3)
+                            
+                            rest_normal = mathutils.geometry.normal([r1, r2, r3])
+                            if rest_normal.length_squared == 0:
+                                rest_normal = mathutils.Vector((0, 0, 1))
+                                
+                            bind_rest_pos = bary_rest + (rest_normal * 0.0001)
+                            
+                            attr_rest_pos[i].vector = bind_rest_pos
                             attr_dist[i].value = distance
                             attr_bound[i].value = True
                             attr_target_idx[i].value = target_idx

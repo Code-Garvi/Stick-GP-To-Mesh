@@ -24,22 +24,22 @@ The GP Object also holds a float property `sticky_gp_global_offset`. A Python `u
 
 ### 2.2 Python Raycasting Engine (The Bake)
 When `bind_unbound_strokes` is executed, Python bakes mathematically precise targeting data into the GP stroke points.
-1. **Mesh Evaluation & BVH:** Generates a triangulated BMesh and `mathutils.bvhtree.BVHTree` for every target. Evaluates modifiers (e.g., Armatures) using `obj.evaluated_get(depsgraph)`.
-2. **Matrix Conversion:** Calculates `world_to_target @ gp_to_world` to ensure precise math between local/world spaces.
-3. **Proximity Raycast:** Loops through all assigned meshes (or all meshes in a collection). Compares distances using `bvh.find_nearest()` and selects the closest face.
-4. **Barycentric Bake:** Saves 5 custom attributes onto the GP drawing data:
-    - `bind_v1`, `bind_v2`, `bind_v3` (INT): Indices of the 3 vertices of the triangle.
-    - `bind_bary` (FLOAT_VECTOR): The barycentric weights (U, V, W).
+1. **Attribute Injection:** Checks if the target mesh has a `rest_position` attribute. If missing, it dynamically generates it (`ensure_rest_position`).
+2. **Mesh Evaluation & BVH:** Generates a triangulated BMesh and `mathutils.bvhtree.BVHTree` for every target using evaluated geometry.
+3. **Proximity Raycast:** Compares distances using `bvh.find_nearest()` and selects the closest face.
+4. **Barycentric Interpolation & Offset:** Extracts the `rest_position` of the 3 hit vertices. It interpolates the exact `rest_position` of the hit location. It then calculates the flat rest-normal of the face and adds a microscopic `0.0001` offset to disambiguate overlapping geometry (e.g. Solidify shells).
+5. **Data Bake:** Saves custom attributes onto the GP drawing data:
+    - `bind_rest_pos` (FLOAT_VECTOR): The interpolated and offset rest position.
     - `bind_dist` (FLOAT): The physical offset distance.
     - `bind_target_idx` (INT): ID of the target mesh.
     - `is_bound` (BOOL): Flag to prevent double-binding.
 
 ### 2.3 Geometry Nodes Compiler & Optimizations
 A Python script dynamically generates the `Sticky_GP` modifier node tree. For every assigned mesh, it writes a node block that:
-1. **Sample Index (Position):** Extracts 3D coordinates for `bind_v1`, `bind_v2`, `bind_v3`.
-2. **Barycentric Interpolation:** Calculates `(Pos1 * U) + (Pos2 * V) + (Pos3 * W)` to locate the deformed surface point.
-3. **Smooth Normal Interpolation:** Does the same for `GeometryNodeInputNormal` from the POINT domain, inheriting smooth shading to prevent kinks at polygon edges.
-4. **Offset & Global Push:** Adds the baked `bind_dist` and the user-adjustable `GlobalOffsetValue` (Math ADD node), then pushes the point away along the calculated normal.
+1. **Proxy Rest Space Formulation:** Evaluates the deformed target mesh, stores its `_deformed_pos` and `_deformed_normal`, and then uses `Set Position` to snap the mesh completely back to its `rest_position`.
+2. **Disambiguation Push:** Uses another `Set Position` to push this proxy mesh slightly outward along its rest normal by exactly `0.0001`. This safely separates identical overlapping faces from generative modifiers (like Solidify) within the abstract search space.
+3. **Nearest Surface Retrieval:** Uses `Sample Nearest Surface` on this abstract proxy mesh, searching via the baked `bind_rest_pos`. It retrieves the `_deformed_pos` and `_deformed_normal`.
+4. **Final Offset:** Adds the baked `bind_dist` and the user-adjustable `GlobalOffsetValue` (Math ADD node), then pushes the point away along the sampled deformed normal.
 5. **Target Switch:** Applies a Set Position node filtering by `bind_target_idx`.
 
 **Smart GN Optimization (Target Hashing):**
@@ -58,7 +58,8 @@ To solve testing workflow issues, a background timer hook (`auto_rebuild_gn_on_r
 ## 3. Major Iterations & Paradigm Shifts
 
 - **V1.0 - V1.8 (UV Map Paradigm):** Relied on generating a per-face UV map (`Sticky_GP_UVMap`). Caused floating point errors and prevented smooth normal interpolation.
-- **V2.0 (Pure Barycentric Paradigm):** Deleted the UV dependency. Moved entirely to vertex indices (`bind_v1`, `v2`, `v3`) and barycentric weights, solving shading and precision issues.
+- **V2.0 - V2.3 (Barycentric Index Paradigm):** Deleted the UV dependency. Moved entirely to vertex indices (`bind_v1`, `v2`, `v3`) and barycentric weights. Failed when generative modifiers altered polycounts or indices dynamically.
+- **V3.0 (Rest Position Paradigm):** Complete overhaul shifting from raw topology IDs to a fluid `rest_position` vector mapping pipeline. Safely survives Subdivision Surface, Solidify, and any polycount-altering modifiers via an internal proxy rest-space mapping abstraction, backed by a normal-push disambiguation factor to solve geometric overlapping.
 - **V2.1 (Collection Binding):** Introduced the ability to assign an entire collection to a layer, enabling strokes to automatically bind across multiple overlapping meshes seamlessly.
 - **V2.2 (Workflow & Offset Update):** Introduced the Global Offset slider driven via python updates, automated target hashing to skip redundant modifier recompilation, and an automated background hook for instant developer hot-reloading.
 - **V2.3 (Native UI Update):** Upgraded the N-Panel bound object list to a native Blender `template_list` with a dedicated collapsible sub-panel for better integration, visual consistency, and direct object renaming.

@@ -1,5 +1,11 @@
 # Sticky GP - Complete Changelog
 
+## V3.0 (Rest Position Paradigm & Disambiguation)
+- **[NEW]** Migrated entirely from the rigid Vertex Index Barycentric system to a dynamic **Rest Position Field** system (`bind_rest_pos`), perfectly decoupling bindings from raw vertex IDs.
+- **[FIX]** **Subdivision Surface & Solidify Support**: The addon now perfectly survives dynamic, topology-altering generative modifiers. Target meshes are evaluated in a proxy rest-pose within Geometry Nodes, ensuring perfectly fluid tracking regardless of polycount changes.
+- **[NEW]** **Normal Disambiguation Search Space**: Injected a microscopic math offset (`0.0001` scale) along the Rest Normal during both python-baking and GN raycasting. This safely separates overlapping identical rest-position faces (e.g., Solidify front and back shells) in a custom abstract 3D search space, eliminating chaotic stroke criss-crossing and zigzagging.
+- **[MODIFIED]** Added an automatic `ensure_rest_position` python injector that guarantees target meshes have the required baseline `rest_position` attribute before raycasting.
+
 ## V2.3 (UI & Native Aesthetics Update)
 - **[MODIFIED]** Replaced the custom operator-based "Bound GP Objects" list with a native Blender `template_list` UI implementation, seamlessly syncing with viewport selection.
 - **[NEW]** Bound GP Objects section is now structured as a native collapsible sub-panel, significantly improving N-panel space management.
